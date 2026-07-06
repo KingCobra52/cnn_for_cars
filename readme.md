@@ -1,58 +1,43 @@
-README.md
-Object Detection with YOLOv5
+# README.md
+# Vehicle Image Classification: CNN vs. Transfer Learning
 
-This project implements an object detection pipeline using the YOLOv5 model. The goal is to detect and classify objects in images with high accuracy and speed.
+This project compares two approaches to classifying images as `background`, `car`, or `truck`: a small convolutional neural network trained from scratch, and a VGG16 model fine-tuned via transfer learning.
 
-📂 Project Structure
+## 📂 Project Structure
 
-final_obj_detection_notebook-4.ipynb
-data/
-└── images/         # Image dataset
-└── labels/         # Corresponding YOLO-format labels
-models/
-└── best.pt         # Trained model weights
-🚀 Features
+- `final_obj_detection_notebook-4.ipynb` — the entire project (data prep, both models, training, evaluation, visualization)
 
-Object detection using YOLOv5
-Training and inference support
-Custom dataset support (YOLO format)
-Evaluation with precision/recall
-🧠 Model
+## 🚀 What it does
 
-Architecture: YOLOv5 (via Ultralytics PyTorch implementation)
-Framework: PyTorch
-Transfer Learning: Uses pre-trained weights for fine-tuning
-Output: Bounding boxes and class predictions
-📊 Dataset
+- Builds a 3-class dataset (`background`, `car`, `truck`) from CIFAR-10 by filtering to the car/truck classes and sampling background images from the rest
+- Trains a custom CNN (2 conv layers + 2 fully-connected layers) from scratch
+- Fine-tunes a pretrained VGG16 (frozen convolutional base, retrained classifier head)
+- Evaluates both models with accuracy and confusion matrices
+- Visualizes accuracy comparisons, training loss curves, and confusion matrix heatmaps
 
-Format: YOLO (images, labels in .txt format)
-Split: Train/Validation/Test
-Custom or preexisting dataset compatible with YOLOv5
-📈 Evaluation
+## 🧠 Models
 
-mAP (mean Average Precision)
-Precision / Recall curves
-Inference speed benchmarks
-🛠️ Installation
+| Model | Approach | Test Accuracy |
+|---|---|---|
+| Custom CNN | Trained from scratch (2 epochs) | ~82.8% |
+| VGG16 | Transfer learning, classifier head fine-tuned (5 epochs) | ~85.5% |
 
-git clone https://github.com/ultralytics/yolov5
-cd yolov5
-pip install -r requirements.txt
-▶️ Running the Notebook
+## 📊 Dataset
 
-Open final_obj_detection_notebook-4.ipynb and run all cells in order:
+- Source: CIFAR-10 (via `tensorflow.keras.datasets.cifar10`), downloaded automatically on first run
+- Classes: `background`, `car`, `truck`
+- Split: 5000 images/class (train), 1000 images/class (test)
 
-Set up paths and environment
-Train or load YOLOv5 model
-Evaluate model on validation/test set
-Visualize predictions
-📝 Notes
+## 🛠️ Requirements
 
-Make sure your dataset is in the correct YOLO format.
-GPU support is highly recommended for training.
-For best performance, tune hyperparameters using hyp.scratch.yaml.
-📬 Contact
+- Python with `tensorflow`, `torch`, `torchvision`, `scikit-learn`, `pandas`, `seaborn`, `matplotlib`
+- GPU recommended for faster training (especially VGG16 fine-tuning)
 
-For questions or feedback, feel free to open an issue or contact the author.
+## ▶️ Running the Notebook
 
-Let me know if you'd like this customized further (e.g. specific dataset name, evaluation output, model version).
+Open `final_obj_detection_notebook-4.ipynb` and run cells in order:
+
+1. Load and construct the vehicle dataset from CIFAR-10
+2. Train the custom CNN
+3. Fine-tune VGG16 via transfer learning
+4. Compare accuracy, training loss, and confusion matrices for both models
