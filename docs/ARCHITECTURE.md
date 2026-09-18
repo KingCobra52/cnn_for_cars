@@ -76,10 +76,19 @@ So the cache is content-addressed. The key is a SHA256 over:
 - the backbone name,
 - its exact pretrained weights tag (`IMAGENET1K_V1` and `V2` are different models),
 - the full preprocessing spec — resize, crop, mean, std, interpolation,
-- the ordered list of image ids.
+- the ordered list of image ids **and their labels**,
+- a fingerprint of the downloaded dataset, taken from `download.json`.
 
 Change any of those and the key changes, so the entry is rebuilt rather than reused.
-`tests/test_cache_key.py` checks each of these individually, including that ids are
+
+The last two were added after a review found the key could not do the job this section
+claims. Image ids are positional (`train_00000`), so a key over ids alone reduced to
+*(backbone, preprocessing, image count)*. Swapping the Hub mirror for another with the
+same number of images produced an identical key, and the cache then served the previous
+mirror's embeddings against the new mirror's labels — silently, corrupting every
+downstream number with nothing failing. Labels and the dataset fingerprint close that.
+
+`tests/test_cache_key.py` checks each input individually, including that ids are
 separated when hashed — without a separator, `["ab", "c"]` and `["a", "bc"]` would
 collide.
 
@@ -99,6 +108,15 @@ CIFAR-normalised tensors to a pretrained ImageNet VGG16. That mistake was invisi
 because the task was easy enough that the model still scored 85%. Making the two
 inseparable means it cannot recur, and `PreprocessSpec` being hashable means a change to
 it invalidates the cache.
+
+Binding the two together is necessary but not sufficient: the constants still have to be
+*right*. `resnet50` was bound to a 256/bicubic transform when its IMAGENET1K_V2 weights
+want 232/bilinear — a quieter version of the same mistake, degrading every embedding
+that backbone produced. `tests/test_transforms.py` now asserts each torchvision
+backbone's spec against `Weights.transforms()` directly, so the claim is checked rather
+than asserted. `app/serving.py` reads the interpolation from the bundle for the same
+reason; it previously hardcoded bicubic, which was invisible while every backbone
+happened to use it.
 
 ## Evaluation discipline
 

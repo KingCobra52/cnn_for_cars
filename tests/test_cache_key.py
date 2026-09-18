@@ -91,3 +91,68 @@ def test_registered_backbones_declare_a_positive_dim(name: str) -> None:
 def test_unknown_backbone_lists_the_available_ones() -> None:
     with pytest.raises(KeyError, match="resnet50"):
         get_backbone("resnet18")
+
+
+# ------------------------------------------------------------------ dataset identity
+
+
+def test_labels_are_part_of_the_key() -> None:
+    """Labels must change the key, because image ids alone cannot.
+
+    Image ids are positional, so swapping a mirror for one with the same image count
+    produced an identical key. The cache then served the old mirror's embeddings against
+    the new mirror's labels -- silently, with every downstream number wrong and no test
+    failing.
+    """
+    ids = ["train_00000", "train_00001", "train_00002"]
+    a = compute_cache_key(make_spec(), ids, [0, 1, 2], fingerprint="dataset-a")
+    b = compute_cache_key(make_spec(), ids, [0, 1, 1], fingerprint="dataset-a")
+    assert a != b
+
+
+def test_dataset_fingerprint_is_part_of_the_key() -> None:
+    """Two mirrors can agree on ids and labels and still be different images."""
+    ids = ["train_00000", "train_00001"]
+    a = compute_cache_key(make_spec(), ids, [0, 1], fingerprint="mirror-a")
+    b = compute_cache_key(make_spec(), ids, [0, 1], fingerprint="mirror-b")
+    assert a != b
+
+
+def test_key_is_deterministic_with_labels() -> None:
+    ids, labels = ["a", "b"], [3, 4]
+    assert compute_cache_key(make_spec(), ids, labels, fingerprint="f") == compute_cache_key(
+        make_spec(), ids, labels, fingerprint="f"
+    )
+
+
+def test_label_separator_prevents_collisions() -> None:
+    """Without the ':' separator, ('a', 1) + ('b', 2) could collide with ('a', 12)."""
+    a = compute_cache_key(make_spec(), ["a", "b"], [1, 2], fingerprint="f")
+    b = compute_cache_key(make_spec(), ["a", "b1"], [2, 2], fingerprint="f")
+    assert a != b
+
+
+def test_mismatched_labels_are_rejected() -> None:
+    with pytest.raises(ValueError, match="align"):
+        compute_cache_key(make_spec(), ["a", "b", "c"], [0, 1], fingerprint="f")
+
+
+def test_missing_download_json_yields_unknown_fingerprint(tmp_path, monkeypatch) -> None:
+    """A hand-assembled dataset still works; it just cannot be fingerprinted."""
+    monkeypatch.setenv("CARVISION_ROOT", str(tmp_path))
+    from carvision.features.cache import dataset_fingerprint
+
+    assert dataset_fingerprint() == "unknown"
+
+
+def test_fingerprint_is_read_from_download_json(tmp_path, monkeypatch) -> None:
+    import json
+
+    monkeypatch.setenv("CARVISION_ROOT", str(tmp_path))
+    root = tmp_path / "data" / "stanford_cars"
+    root.mkdir(parents=True)
+    (root / "download.json").write_text(json.dumps({"manifest_sha256": "deadbeef"}))
+
+    from carvision.features.cache import dataset_fingerprint
+
+    assert dataset_fingerprint() == "deadbeef"

@@ -1,8 +1,0 @@
-# @package backbone
-name: resnet50
-kind: torchvision
-weights: IMAGENET1K_V2
-embedding_dim: 2048
-preprocess: imagenet_224
-# Grad-CAM needs a spatial feature map; this is the last conv block.
-gradcam_layer: layer4

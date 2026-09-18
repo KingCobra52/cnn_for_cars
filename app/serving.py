@@ -28,7 +28,20 @@ TOP_K = 5
 MODEL_DIR_DEFAULT = Path(os.environ.get("CARVISION_MODEL_DIR", "artifacts/serving"))
 
 
-def resize_shorter_side(image: Image.Image, size: int) -> Image.Image:
+#: PIL resample modes by the name a PreprocessSpec uses. The spec's choice must be
+#: honoured rather than assumed: every backbone used bicubic until resnet50 was corrected
+#: to the bilinear transform its weights actually want, at which point a hardcoded
+#: default silently preprocessed that model wrongly.
+RESAMPLE = {
+    "bicubic": Image.BICUBIC,
+    "bilinear": Image.BILINEAR,
+    "nearest": Image.NEAREST,
+}
+
+
+def resize_shorter_side(
+    image: Image.Image, size: int, resample: int = Image.BICUBIC
+) -> Image.Image:
     """Resize so the shorter side is ``size``, preserving aspect ratio.
 
     Matches ``torchvision.transforms.v2.Resize(size)`` with an int argument, including
@@ -40,6 +53,7 @@ def resize_shorter_side(image: Image.Image, size: int) -> Image.Image:
     Args:
         image: The input image.
         size: Target length of the shorter side.
+        resample: PIL resample mode, matching the backbone's PreprocessSpec.
 
     Returns:
         The resized image.
@@ -49,8 +63,7 @@ def resize_shorter_side(image: Image.Image, size: int) -> Image.Image:
         new_width, new_height = size, int(size * height / width)
     else:
         new_width, new_height = int(size * width / height), size
-    # BICUBIC with antialiasing, matching the transform spec's default.
-    return image.resize((new_width, new_height), Image.BICUBIC)
+    return image.resize((new_width, new_height), resample)
 
 
 def center_crop(image: Image.Image, size: int) -> Image.Image:
@@ -79,6 +92,7 @@ def preprocess(
     crop: int,
     mean: tuple[float, float, float],
     std: tuple[float, float, float],
+    interpolation: str = "bicubic",
 ) -> np.ndarray:
     """Turn a PIL image into a normalised NCHW float32 batch of one.
 
@@ -88,11 +102,16 @@ def preprocess(
         crop: Final square crop size.
         mean: Per-channel normalisation mean.
         std: Per-channel normalisation standard deviation.
+        interpolation: Resample mode name from the backbone's PreprocessSpec.
 
     Returns:
         A ``(1, 3, crop, crop)`` float32 array.
+
+    Raises:
+        KeyError: If the interpolation name is not one PIL supports.
     """
-    rgb = center_crop(resize_shorter_side(image.convert("RGB"), resize), crop)
+    resample = RESAMPLE[interpolation]
+    rgb = center_crop(resize_shorter_side(image.convert("RGB"), resize, resample), crop)
 
     array = np.asarray(rgb, dtype=np.float32) / 255.0
     array = (array - np.array(mean, dtype=np.float32)) / np.array(std, dtype=np.float32)
@@ -139,6 +158,7 @@ class Predictor:
             "crop": int(spec["crop"]),
             "mean": tuple(spec["mean"]),
             "std": tuple(spec["std"]),
+            "interpolation": str(spec.get("interpolation", "bicubic")),
         }
 
     @property

@@ -10,13 +10,36 @@ import pytest
 from carvision.report import RunSummary, collect_runs, headline_table, render
 
 
-def write_run(root: Path, name: str, *, backbone: str, head: str, seed: int, top1: float) -> None:
-    """Create a minimal but complete evaluated-run directory."""
+def write_run(
+    root: Path,
+    name: str,
+    *,
+    backbone: str,
+    head: str,
+    seed: int,
+    top1: float,
+    val_top1: float | None = None,
+) -> None:
+    """Create a minimal but complete evaluated-run directory.
+
+    ``val_top1`` defaults to tracking ``top1`` so most callers need not think about it.
+    Tests that care about selection discipline set the two apart deliberately.
+    """
     run_dir = root / name
     run_dir.mkdir(parents=True)
 
     (run_dir / "config.json").write_text(
         json.dumps({"backbone": backbone, "head": head, "seed": seed})
+    )
+    (run_dir / "metrics.json").write_text(
+        json.dumps(
+            {
+                "best_val_top1": top1 if val_top1 is None else val_top1,
+                "best_epoch": 3,
+                "epochs_run": 4,
+                "history": [],
+            }
+        )
     )
     (run_dir / "evaluation.json").write_text(
         json.dumps(
@@ -101,6 +124,24 @@ def test_headline_uses_the_median_seed_not_the_best(runs: Path) -> None:
     table = headline_table(collect_runs(runs))
     assert "87.00%" not in table
     assert "86.00%" in table
+
+
+def test_selection_follows_validation_not_test(tmp_path: Path) -> None:
+    """The headline run must be chosen on validation, never on test.
+
+    Picking the run with the best *test* score and then reporting that score is
+    selection on the test set. Here the run that wins on validation is deliberately the
+    weaker one on test, so a test-based selector would pick the other and be caught.
+    """
+    root = tmp_path / "runs"
+    write_run(root, "wins-on-val", backbone="a", head="linear", seed=0, top1=0.70, val_top1=0.95)
+    write_run(root, "wins-on-test", backbone="b", head="linear", seed=0, top1=0.90, val_top1=0.60)
+
+    summaries = collect_runs(root)
+    document = render(summaries)
+
+    assert "wins-on-val" in document
+    assert "Best run: `wins-on-val`" in document
 
 
 def test_render_produces_a_complete_document(runs: Path) -> None:
