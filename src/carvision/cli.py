@@ -18,6 +18,7 @@ from carvision.utils.logging import configure_logging, get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
 logger = get_logger(__name__)
 
@@ -89,6 +90,31 @@ def build_parser() -> argparse.ArgumentParser:
     zeroshot = sub.add_parser("zeroshot", help="CLIP zero-shot baseline (no training).")
     zeroshot.add_argument("--backbone", default="clip_vitb32")
     zeroshot.add_argument("--split", default="test")
+
+    # ---- eval
+    eval_parser = sub.add_parser("eval", help="Score a run on the test set.")
+    eval_parser.add_argument(
+        "--run", default="best", help="Run directory name, or 'best' for the top val run."
+    )
+    eval_parser.add_argument("--resamples", type=int, default=1000)
+
+    compare = sub.add_parser("compare", help="Paired bootstrap between two evaluated runs.")
+    compare.add_argument("first")
+    compare.add_argument("second")
+
+    # ---- export / bench
+    export_parser = sub.add_parser("export", help="Export a run to ONNX and verify parity.")
+    export_parser.add_argument("--run", default="best")
+    export_parser.add_argument("--out", default="artifacts/serving")
+
+    bench = sub.add_parser("bench", help="Benchmark CPU latency, PyTorch vs ONNX Runtime.")
+    bench.add_argument("--run", default="best")
+    bench.add_argument("--bundle", default="artifacts/serving")
+    bench.add_argument("--batch-sizes", nargs="+", type=int, default=[1, 8])
+    bench.add_argument("--runs", type=int, default=100)
+
+    figures = sub.add_parser("figures", help="Regenerate every figure under docs/figures/.")
+    figures.add_argument("--run", default="best")
 
     return parser
 
@@ -194,6 +220,89 @@ def _cmd_zeroshot(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_run(name: str) -> "Path":
+    """Resolve a --run argument to a directory, accepting the literal 'best'."""
+    from carvision.eval import find_best_run
+    from carvision.utils.paths import runs_dir
+
+    if name == "best":
+        return find_best_run()
+    path = runs_dir() / name
+    if not path.is_dir():
+        raise FileNotFoundError(f"No run directory at {path}")
+    return path
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    from carvision.eval import evaluate_run
+
+    result = evaluate_run(_resolve_run(args.run), resamples=args.resamples)
+    print(json.dumps(result.as_dict(), indent=2))
+    return 0
+
+
+def _cmd_compare(args: argparse.Namespace) -> int:
+    from carvision.eval import compare_runs
+
+    interval = compare_runs(_resolve_run(args.first), _resolve_run(args.second))
+    print(
+        json.dumps(
+            {**interval.as_dict(), "difference_resolved": interval.excludes_zero}, indent=2
+        )
+    )
+    return 0
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from carvision.export import prepare_serving_bundle
+
+    bundle = prepare_serving_bundle(_resolve_run(args.run), Path(args.out))
+    print(f"Serving bundle: {bundle}")
+    return 0
+
+
+def _cmd_bench(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    import torch
+
+    from carvision.eval import load_run
+    from carvision.export import ServingModel, benchmark_onnx, benchmark_pytorch
+    from carvision.models.backbones import get_backbone
+
+    run_dir = _resolve_run(args.run)
+    head, payload = load_run(run_dir)
+    spec = get_backbone(str(payload["backbone"]))
+    model = ServingModel(spec.build(), head).eval()
+    onnx_path = Path(args.bundle) / "model.onnx"
+
+    rows = []
+    for batch_size in args.batch_sizes:
+        example = torch.randn(batch_size, 3, spec.preprocess.crop, spec.preprocess.crop)
+        rows.append(benchmark_pytorch(model, example, runs=args.runs).as_dict())
+        if onnx_path.exists():
+            rows.append(benchmark_onnx(onnx_path, example, runs=args.runs).as_dict())
+
+    (run_dir / "latency.json").write_text(json.dumps(rows, indent=2) + "\n")
+    for row in rows:
+        print(
+            f"{row['runtime']:12s} batch={row['batch_size']:<3d} "
+            f"p50={row['p50_ms']:7.1f}ms  p95={row['p95_ms']:7.1f}ms"
+        )
+    return 0
+
+
+def _cmd_figures(args: argparse.Namespace) -> int:
+    from carvision.figures import generate_all
+
+    paths = generate_all(_resolve_run(args.run))
+    for path in paths:
+        print(path)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI.
 
@@ -214,10 +323,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         "train": _cmd_train,
         "sweep": _cmd_sweep,
         "zeroshot": _cmd_zeroshot,
+        "eval": _cmd_eval,
+        "compare": _cmd_compare,
+        "export": _cmd_export,
+        "bench": _cmd_bench,
+        "figures": _cmd_figures,
     }
     try:
         return handlers[args.command](args)
-    except (RuntimeError, ValueError, KeyError) as error:
+    except (RuntimeError, ValueError, KeyError, FileNotFoundError) as error:
         # Surface the actionable message without a traceback; -v restores the detail.
         logger.error("%s", error)
         if args.verbose:
