@@ -389,9 +389,16 @@ def clear(backbone: str | None = None) -> int:
     if not root.exists():
         return 0
 
+    # Globbing for manifest.json would skip interrupted entries, which have a
+    # progress.json and no manifest. Those are exactly the ones a user clearing the
+    # cache wants gone: left behind, `clear` reports "0 removed" and the next
+    # non-forced build silently resumes them.
+    markers = ("manifest.json", "progress.json", "embeddings.npy")
+    directories = {path.parent for marker in markers for path in root.glob(f"**/{marker}")}
+
     removed = 0
-    for directory in sorted(root.glob("**/manifest.json")):
-        shutil.rmtree(directory.parent)
+    for directory in sorted(directories):
+        shutil.rmtree(directory)
         removed += 1
     logger.info("Removed %d cache entries from %s", removed, root)
     return removed

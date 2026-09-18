@@ -36,6 +36,51 @@ from carvision.utils.seed import set_seed
 logger = get_logger(__name__)
 
 
+class TrainingError(RuntimeError):
+    """Raised when a run cannot produce a usable model."""
+
+
+def resolve_num_classes(*label_arrays: np.ndarray) -> int:
+    """Return the number of classes, preferring the dataset's declared class list.
+
+    Inferring ``max(label) + 1`` from the labels present silently narrows the head when
+    a class is missing from train and val -- which is possible in the long tail of a
+    196-class dataset -- while ``classes.txt``, the confusion matrix and the served
+    class names all still assume the full set.
+
+    Args:
+        *label_arrays: Label arrays to fall back on.
+
+    Returns:
+        The declared class count when the dataset has been downloaded, otherwise the
+        highest observed label plus one.
+    """
+    from carvision.data.download import DatasetAcquisitionError, load_class_names
+
+    observed = max(int(labels.max()) for labels in label_arrays) + 1
+    try:
+        declared = len(load_class_names())
+    except DatasetAcquisitionError:
+        # No classes.txt: a synthetic fixture or a hand-assembled directory.
+        return observed
+
+    if declared < observed:
+        raise TrainingError(
+            f"Labels go up to {observed - 1} but classes.txt declares only {declared} "
+            f"classes. The split and the class list disagree; re-run "
+            f"`carvision data download`."
+        )
+    if declared > observed:
+        logger.warning(
+            "classes.txt declares %d classes but only %d appear in train+val; the head "
+            "will cover all %d so the confusion matrix stays comparable.",
+            declared,
+            observed,
+            declared,
+        )
+    return declared
+
+
 @dataclass
 class TrainConfig:
     """Hyperparameters for one head-training run."""
@@ -138,7 +183,7 @@ def train(config: TrainConfig) -> TrainResult:
 
     train_set = EmbeddingDataset(train_x, train_y)
     val_set = EmbeddingDataset(val_x, val_y)
-    num_classes = int(max(train_y.max(), val_y.max())) + 1
+    num_classes = resolve_num_classes(train_y, val_y)
 
     head = build_head(config.head, spec.embedding_dim, num_classes, **config.head_kwargs)
     criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
@@ -202,6 +247,17 @@ def train(config: TrainConfig) -> TrainResult:
                 )
                 break
 
+    if not best_state:
+        # Reached when max_epochs is 0, or when validation accuracy was NaN throughout.
+        # load_state_dict({}) otherwise raises a "Missing key(s)" error that says
+        # nothing about the actual cause.
+        raise TrainingError(
+            f"No epoch improved on the initial validation accuracy, so there is no "
+            f"checkpoint to save (max_epochs={config.max_epochs}, "
+            f"epochs_run={len(history)}). Check that max_epochs >= 1 and that the "
+            f"validation split is non-empty."
+        )
+
     head.load_state_dict(best_state)
     elapsed = time.monotonic() - started
 
@@ -240,6 +296,14 @@ def _write_run(
 
     name = f"{config.backbone}-{config.head}-seed{config.seed}"
     run_dir = ensure_dir(runs_dir() / name)
+
+    # The directory name does not encode the hyperparameters, so retraining with a
+    # different learning rate reuses it. Overwriting checkpoint.pt while leaving the
+    # previous run's evaluation.json and predictions in place would let `report` and
+    # `carvision export` pair a new model with old metrics and an old calibration
+    # temperature. Clear anything derived from the model being replaced.
+    for stale in ("evaluation.json", "test_predictions.npz", "latency.json"):
+        (run_dir / stale).unlink(missing_ok=True)
 
     torch.save(
         {

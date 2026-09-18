@@ -145,13 +145,15 @@ def build_splits(
         "test": manifest[manifest["split"] == "test"].sort_values("image_id")[columns],
     }
 
+    # Validate before writing. Checking afterwards leaves a leaking split on disk, and
+    # the --overwrite guard then protects the bad file from being regenerated.
+    assert_disjoint(frames)
+
     for name, frame in frames.items():
         frame.to_csv(out_dir / f"{name}.csv", index=False)
         logger.info("%-5s %5d images, %3d classes", name, len(frame), frame["label_id"].nunique())
 
-    sizes = SplitSizes(**{name: len(frame) for name, frame in frames.items()})
-    assert_disjoint(frames)
-    return sizes
+    return SplitSizes(**{name: len(frame) for name, frame in frames.items()})
 
 
 def assert_disjoint(frames: dict[str, pd.DataFrame]) -> None:
