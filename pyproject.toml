@@ -118,7 +118,9 @@ convention = "google"
 # ---------------------------------------------------------------- mypy
 
 [tool.mypy]
-python_version = "3.11"
+# Deliberately not pinning python_version: the CI matrix runs 3.11 and 3.12, and a pin
+# makes mypy reject the PEP 695 `type` statements in the 3.12 numpy stubs. Letting mypy
+# follow the running interpreter is what actually checks each matrix entry.
 strict = true
 warn_unreachable = true
 disallow_untyped_defs = true
