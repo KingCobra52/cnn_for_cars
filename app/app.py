@@ -49,7 +49,7 @@ def footer_text(predictor: Predictor) -> str:
     metrics = predictor.config.get("metrics", {})
     return (
         f"Test top-1 **{100 * metrics.get('top1', 0):.1f}%** "
-        f"(95% CI {100 * metrics.get('top1_low', 0):.1f}–"
+        f"(95% CI {100 * metrics.get('top1_low', 0):.1f}-"
         f"{100 * metrics.get('top1_high', 0):.1f}), "
         f"top-5 **{100 * metrics.get('top5', 0):.1f}%**, on the official Stanford Cars "
         f"test split of {metrics.get('num_samples', 0):,} images. "

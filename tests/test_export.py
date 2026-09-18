@@ -110,5 +110,7 @@ def test_exported_graph_accepts_a_different_batch_size(exported) -> None:
 
     session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
     for batch in (1, 5):
-        (logits,) = session.run(None, {"images": np.random.randn(batch, 3, 32, 32).astype("float32")})
+        (logits,) = session.run(
+            None, {"images": np.random.randn(batch, 3, 32, 32).astype("float32")}
+        )
         assert logits.shape == (batch, 7)

@@ -66,8 +66,20 @@ def parse_class_name(name: str) -> dict[str, str]:
 
     # Body styles that appear as the trailing token in this dataset's naming scheme.
     body_styles = {
-        "sedan", "coupe", "convertible", "hatchback", "wagon", "suv", "van",
-        "minivan", "cab", "crew", "extended", "regular", "supercab", "club",
+        "sedan",
+        "coupe",
+        "convertible",
+        "hatchback",
+        "wagon",
+        "suv",
+        "van",
+        "minivan",
+        "cab",
+        "crew",
+        "extended",
+        "regular",
+        "supercab",
+        "club",
     }
     body = tokens[-1] if tokens and tokens[-1].lower() in body_styles else ""
 
@@ -117,7 +129,9 @@ def build_text_classifier(
         averaged = embeddings.mean(dim=0)
         weights.append(averaged / averaged.norm())
 
-    logger.info("Built zero-shot classifier: %d classes x %d templates", len(class_names), len(templates))
+    logger.info(
+        "Built zero-shot classifier: %d classes x %d templates", len(class_names), len(templates)
+    )
     return torch.stack(weights).numpy().astype(np.float32)
 
 
@@ -142,4 +156,5 @@ def predict(image_embeddings: np.ndarray, text_classifier: np.ndarray) -> np.nda
             f"CLIP model; check that --backbone is the CLIP one."
         )
     normalised = image_embeddings / np.linalg.norm(image_embeddings, axis=1, keepdims=True)
-    return (normalised @ text_classifier.T).astype(np.float32)
+    scores: np.ndarray = (normalised @ text_classifier.T).astype(np.float32)
+    return scores

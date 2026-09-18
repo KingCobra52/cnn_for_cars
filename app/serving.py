@@ -31,7 +31,11 @@ MODEL_DIR_DEFAULT = Path(os.environ.get("CARVISION_MODEL_DIR", "artifacts/servin
 def resize_shorter_side(image: Image.Image, size: int) -> Image.Image:
     """Resize so the shorter side is ``size``, preserving aspect ratio.
 
-    Matches ``torchvision.transforms.v2.Resize(size)`` with an int argument.
+    Matches ``torchvision.transforms.v2.Resize(size)`` with an int argument, including
+    its rounding: torchvision **truncates** the computed long side rather than rounding
+    it. That one-pixel difference shifts the subsequent centre crop and yields a
+    completely different tensor, so it is not cosmetic -- see
+    ``tests/test_serving_parity.py``, which caught exactly this.
 
     Args:
         image: The input image.
@@ -42,9 +46,9 @@ def resize_shorter_side(image: Image.Image, size: int) -> Image.Image:
     """
     width, height = image.size
     if width <= height:
-        new_width, new_height = size, round(size * height / width)
+        new_width, new_height = size, int(size * height / width)
     else:
-        new_width, new_height = round(size * width / height), size
+        new_width, new_height = int(size * width / height), size
     # BICUBIC with antialiasing, matching the transform spec's default.
     return image.resize((new_width, new_height), Image.BICUBIC)
 
@@ -63,8 +67,8 @@ def center_crop(image: Image.Image, size: int) -> Image.Image:
         The cropped image.
     """
     width, height = image.size
-    left = int(round((width - size) / 2.0))
-    top = int(round((height - size) / 2.0))
+    left = round((width - size) / 2.0)
+    top = round((height - size) / 2.0)
     return image.crop((left, top, left + size, top + size))
 
 

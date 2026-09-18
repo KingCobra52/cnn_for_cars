@@ -110,7 +110,7 @@ def collect(
         predicted_name = class_names[int(predictions[index])]
         cases.append(
             ErrorCase(
-                image_id=str(image_ids[index]),
+                image_id=str(image_ids[int(index)]),
                 true_name=true_name,
                 predicted_name=predicted_name,
                 confidence=float(probabilities[index, predictions[index]]),

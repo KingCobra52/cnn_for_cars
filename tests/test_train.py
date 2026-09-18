@@ -15,7 +15,6 @@ from carvision.models.heads import MLPHead, TemperatureScaler, build_head
 from carvision.train import cosine_lr, evaluate
 from carvision.utils.seed import set_seed
 
-
 # ------------------------------------------------------------------ heads
 
 

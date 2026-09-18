@@ -87,7 +87,7 @@ def stratified_val_split(
         permuted = rng.permutation(indices)
 
         # At least one validation image per class, and at least one left in train.
-        n_val = int(round(len(indices) * val_fraction))
+        n_val = round(len(indices) * val_fraction)
         n_val = max(1, min(n_val, len(indices) - 1))
         mask[permuted[:n_val]] = True
 
@@ -118,9 +118,7 @@ def build_splits(
 
     manifest_path = data_dir() / "stanford_cars" / "manifest.csv"
     if not manifest_path.exists():
-        raise SplitError(
-            f"{manifest_path} not found. Run `carvision data download` first."
-        )
+        raise SplitError(f"{manifest_path} not found. Run `carvision data download` first.")
 
     out_dir = ensure_dir(splits_dir())
     existing = [p for p in (out_dir / f"{s}.csv" for s in SPLIT_NAMES) if p.exists()]

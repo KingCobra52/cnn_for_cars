@@ -14,17 +14,28 @@ from carvision.interpret.errors import (
 )
 from carvision.models.zeroshot import parse_class_name
 
-
 # ------------------------------------------------------------------ name parsing
 
 
 @pytest.mark.parametrize(
     ("name", "expected"),
     [
-        ("2012 Tesla Model S Sedan", {"make": "Tesla", "model": "Model S", "body": "Sedan", "year": "2012"}),
-        ("2012 BMW 3 Series Sedan", {"make": "BMW", "model": "3 Series", "body": "Sedan", "year": "2012"}),
-        ("AM General Hummer SUV 2000", {"make": "AM", "model": "General Hummer", "body": "SUV", "year": "2000"}),
-        ("2007 Ford Focus Sedan", {"make": "Ford", "model": "Focus", "body": "Sedan", "year": "2007"}),
+        (
+            "2012 Tesla Model S Sedan",
+            {"make": "Tesla", "model": "Model S", "body": "Sedan", "year": "2012"},
+        ),
+        (
+            "2012 BMW 3 Series Sedan",
+            {"make": "BMW", "model": "3 Series", "body": "Sedan", "year": "2012"},
+        ),
+        (
+            "AM General Hummer SUV 2000",
+            {"make": "AM", "model": "General Hummer", "body": "SUV", "year": "2000"},
+        ),
+        (
+            "2007 Ford Focus Sedan",
+            {"make": "Ford", "model": "Focus", "body": "Sedan", "year": "2007"},
+        ),
     ],
 )
 def test_parse_class_name(name: str, expected: dict[str, str]) -> None:

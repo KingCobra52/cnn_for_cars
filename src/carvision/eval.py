@@ -88,9 +88,7 @@ def load_run(run_dir: Path) -> tuple[torch.nn.Module, dict[str, Any]]:
         raise FileNotFoundError(f"No checkpoint at {path}")
 
     payload = torch.load(path, map_location="cpu", weights_only=True)
-    head = build_head(
-        payload["head_kind"], payload["embedding_dim"], payload["num_classes"]
-    )
+    head = build_head(payload["head_kind"], payload["embedding_dim"], payload["num_classes"])
     head.load_state_dict(payload["state_dict"])
     head.eval()
     return head, payload
@@ -98,7 +96,8 @@ def load_run(run_dir: Path) -> tuple[torch.nn.Module, dict[str, Any]]:
 
 @torch.inference_mode()
 def _logits_for(head: torch.nn.Module, embeddings: np.ndarray) -> np.ndarray:
-    return head(torch.from_numpy(embeddings.astype(np.float32))).numpy()
+    logits: np.ndarray = head(torch.from_numpy(embeddings.astype(np.float32))).numpy()
+    return logits
 
 
 def evaluate_run(
@@ -194,6 +193,7 @@ def compare_runs(first: Path, second: Path, *, seed: int = 0) -> bootstrap.Inter
         FileNotFoundError: If either run lacks saved predictions.
         ValueError: If the two runs were evaluated on different images.
     """
+
     def correctness(run_dir: Path) -> tuple[np.ndarray, np.ndarray]:
         path = run_dir / "test_predictions.npz"
         if not path.exists():

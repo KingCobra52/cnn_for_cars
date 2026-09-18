@@ -71,7 +71,9 @@ def test_image_order_changes_the_key() -> None:
 
 def test_ids_cannot_be_confused_by_concatenation() -> None:
     """Hashing ids without a separator would make ['ab','c'] and ['a','bc'] collide."""
-    assert compute_cache_key(make_spec(), ["ab", "c"]) != compute_cache_key(make_spec(), ["a", "bc"])
+    assert compute_cache_key(make_spec(), ["ab", "c"]) != compute_cache_key(
+        make_spec(), ["a", "bc"]
+    )
 
 
 @pytest.mark.parametrize("name", available_backbones())

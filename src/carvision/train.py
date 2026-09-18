@@ -142,9 +142,7 @@ def train(config: TrainConfig) -> TrainResult:
 
     head = build_head(config.head, spec.embedding_dim, num_classes, **config.head_kwargs)
     criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
-    optimizer = torch.optim.AdamW(
-        head.parameters(), lr=config.lr, weight_decay=config.weight_decay
-    )
+    optimizer = torch.optim.AdamW(head.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
     train_features, train_labels = train_set.tensors()
     val_features, val_labels = val_set.tensors()
@@ -158,9 +156,7 @@ def train(config: TrainConfig) -> TrainResult:
     generator = torch.Generator().manual_seed(config.seed)
 
     for epoch in range(config.max_epochs):
-        lr = cosine_lr(
-            epoch, config.max_epochs, warmup=config.warmup_epochs, base_lr=config.lr
-        )
+        lr = cosine_lr(epoch, config.max_epochs, warmup=config.warmup_epochs, base_lr=config.lr)
         for group in optimizer.param_groups:
             group["lr"] = lr
 

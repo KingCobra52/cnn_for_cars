@@ -72,7 +72,8 @@ class ServingModel(nn.Module):
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """Map ``(B, 3, H, W)`` preprocessed images to calibrated logits."""
-        return self.head(self.backbone(images)) / self.temperature
+        logits: torch.Tensor = self.head(self.backbone(images)) / self.temperature
+        return logits
 
 
 @dataclass(frozen=True)
@@ -182,9 +183,7 @@ def verify(
     (actual,) = session.run(None, {"images": example.numpy()})
 
     if expected.shape != actual.shape:
-        raise ExportError(
-            f"Shape mismatch: PyTorch {expected.shape} vs ONNX {actual.shape}."
-        )
+        raise ExportError(f"Shape mismatch: PyTorch {expected.shape} vs ONNX {actual.shape}.")
 
     absolute = np.abs(expected - actual)
     relative = absolute / np.maximum(np.abs(expected), 1e-8)

@@ -282,8 +282,8 @@ def _entry_from_manifest(directory: Path) -> CacheEntry:
         key=str(manifest["key"]),
         backbone=str(manifest["backbone"]),
         split=str(manifest["split"]),
-        num_rows=int(manifest["num_rows"]),  # type: ignore[arg-type]
-        dim=int(manifest["dim"]),  # type: ignore[arg-type]
+        num_rows=int(str(manifest["num_rows"])),
+        dim=int(str(manifest["dim"])),
         directory=directory,
     )
 

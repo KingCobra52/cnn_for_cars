@@ -12,7 +12,7 @@ torchvision 0.13 and warning on every run. Nothing here uses the ``pretrained`` 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 import torch
 from torch import nn
@@ -94,7 +94,7 @@ def _resnet50() -> nn.Module:
     """ResNet-50 with its classifier removed, pooled to a 2048-d vector."""
     from torchvision.models import ResNet50_Weights, resnet50
 
-    model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+    model: nn.Module = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
     # Identity in place of the 1000-way fc turns the model into a feature extractor
     # while leaving the global average pool intact.
     model.fc = nn.Identity()
@@ -126,12 +126,17 @@ class _CLIPImageTower(nn.Module):
             ``(B, 512)`` image embeddings, unnormalised. L2 normalisation is applied by
             the consumer that needs it (zero-shot does, a linear probe does not have to).
         """
-        return self.clip.encode_image(images)
+        # nn.Module.__getattr__ is typed as returning Tensor | Module, so the call
+        # needs an explicit cast for the type checker.
+        encode = cast("Callable[[torch.Tensor], torch.Tensor]", self.clip.encode_image)
+        return encode(images)
 
 
 def _dinov2_vits14() -> nn.Module:
     """DINOv2 ViT-S/14, returning the 384-d CLS embedding."""
-    model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14", verbose=False)
+    model = torch.hub.load(  # type: ignore[no-untyped-call]
+        "facebookresearch/dinov2", "dinov2_vits14", verbose=False
+    )
     assert isinstance(model, nn.Module)
     return model
 
@@ -180,9 +185,7 @@ def get_backbone(name: str) -> BackboneSpec:
     try:
         return REGISTRY[name]
     except KeyError:
-        raise KeyError(
-            f"Unknown backbone {name!r}. Available: {sorted(REGISTRY)}"
-        ) from None
+        raise KeyError(f"Unknown backbone {name!r}. Available: {sorted(REGISTRY)}") from None
 
 
 def available_backbones() -> list[str]:
@@ -225,4 +228,5 @@ def get_transform(name: str, *, train: bool = False) -> Callable[..., torch.Tens
     Returns:
         The composed transform.
     """
-    return get_backbone(name).preprocess.build(train=train)
+    transform: Callable[..., torch.Tensor] = get_backbone(name).preprocess.build(train=train)
+    return transform

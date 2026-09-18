@@ -75,7 +75,8 @@ def softmax(logits: np.ndarray, *, axis: int = 1) -> np.ndarray:
     # unchanged mathematically.
     shifted = logits - logits.max(axis=axis, keepdims=True)
     exponentiated = np.exp(shifted)
-    return exponentiated / exponentiated.sum(axis=axis, keepdims=True)
+    probabilities: np.ndarray = exponentiated / exponentiated.sum(axis=axis, keepdims=True)
+    return probabilities
 
 
 def compute(

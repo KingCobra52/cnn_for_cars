@@ -216,13 +216,15 @@ def _cmd_zeroshot(args: argparse.Namespace) -> int:
 
     top1 = float((scores.argmax(axis=1) == labels).mean())
     top5 = float(
-        np.mean([label in row for label, row in zip(labels, np.argsort(-scores)[:, :5], strict=True)])
+        np.mean(
+            [label in row for label, row in zip(labels, np.argsort(-scores)[:, :5], strict=True)]
+        )
     )
     print(json.dumps({"split": args.split, "top1": top1, "top5": top5}, indent=2))
     return 0
 
 
-def _resolve_run(name: str) -> "Path":
+def _resolve_run(name: str) -> Path:
     """Resolve a --run argument to a directory, accepting the literal 'best'."""
     from carvision.eval import find_best_run
     from carvision.utils.paths import runs_dir
@@ -248,9 +250,7 @@ def _cmd_compare(args: argparse.Namespace) -> int:
 
     interval = compare_runs(_resolve_run(args.first), _resolve_run(args.second))
     print(
-        json.dumps(
-            {**interval.as_dict(), "difference_resolved": interval.excludes_zero}, indent=2
-        )
+        json.dumps({**interval.as_dict(), "difference_resolved": interval.excludes_zero}, indent=2)
     )
     return 0
 

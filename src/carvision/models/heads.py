@@ -51,7 +51,8 @@ class LinearHead(nn.Module):
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         """Map ``(B, D)`` embeddings to ``(B, num_classes)`` logits."""
-        return self.fc(self.dropout(self.norm(features)))
+        logits: torch.Tensor = self.fc(self.dropout(self.norm(features)))
+        return logits
 
 
 class MLPHead(nn.Module):
@@ -90,7 +91,8 @@ class MLPHead(nn.Module):
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         """Map ``(B, D)`` embeddings to ``(B, num_classes)`` logits."""
-        return self.net(self.norm(features))
+        logits: torch.Tensor = self.net(self.norm(features))
+        return logits
 
 
 def build_head(
@@ -147,7 +149,8 @@ class TemperatureScaler(nn.Module):
         Parameterised in log space so the temperature cannot go negative or hit zero
         during optimisation.
         """
-        return logits / self.log_temperature.exp()
+        scaled: torch.Tensor = logits / self.log_temperature.exp()
+        return scaled
 
     def fit(self, logits: torch.Tensor, labels: torch.Tensor, *, max_iter: int = 100) -> float:
         """Fit the temperature by minimising validation NLL.
@@ -166,9 +169,9 @@ class TemperatureScaler(nn.Module):
 
         def closure() -> torch.Tensor:
             optimizer.zero_grad()
-            loss = criterion(self.forward(logits), labels)
-            loss.backward()
+            loss: torch.Tensor = criterion(self.forward(logits), labels)
+            loss.backward()  # type: ignore[no-untyped-call]
             return loss
 
-        optimizer.step(closure)  # type: ignore[arg-type]
+        optimizer.step(closure)  # type: ignore[no-untyped-call]
         return self.temperature

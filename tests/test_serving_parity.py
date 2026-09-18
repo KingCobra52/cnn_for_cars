@@ -23,8 +23,12 @@ APP_DIR = Path(__file__).resolve().parents[1] / "app"
 sys.path.insert(0, str(APP_DIR))
 
 import serving  # noqa: E402
-
-from carvision.data.transforms import CLIP_224, DINOV2_224, IMAGENET_224, PreprocessSpec  # noqa: E402
+from carvision.data.transforms import (  # noqa: E402
+    CLIP_224,
+    DINOV2_224,
+    IMAGENET_224,
+    PreprocessSpec,
+)
 
 
 def make_image(width: int, height: int, seed: int = 0) -> Image.Image:
@@ -60,9 +64,7 @@ def test_serving_module_imports_no_torch() -> None:
 
 @pytest.mark.parametrize("spec", [IMAGENET_224, CLIP_224, DINOV2_224])
 @pytest.mark.parametrize("size", [(400, 300), (300, 400), (224, 224), (1000, 640)])
-def test_preprocessing_matches_torchvision(
-    spec: PreprocessSpec, size: tuple[int, int]
-) -> None:
+def test_preprocessing_matches_torchvision(spec: PreprocessSpec, size: tuple[int, int]) -> None:
     """Both implementations must produce the same tensor, for every backbone and shape.
 
     Both landscape and portrait inputs are covered because the shorter-side resize
@@ -110,9 +112,7 @@ def test_greyscale_input_is_accepted() -> None:
         ((200, 200), 100, (100, 100)),  # square
     ],
 )
-def test_resize_shorter_side(
-    size: tuple[int, int], target: int, expected: tuple[int, int]
-) -> None:
+def test_resize_shorter_side(size: tuple[int, int], target: int, expected: tuple[int, int]) -> None:
     assert serving.resize_shorter_side(make_image(*size), target).size == expected
 
 

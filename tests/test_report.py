@@ -46,7 +46,11 @@ def write_run(root: Path, name: str, *, backbone: str, head: str, seed: int, top
                     "true_class_was_second_guess": 33,
                 },
                 "most_confused_pairs": [
-                    {"true": "2012 Ford Focus Sedan", "predicted": "2007 Ford Focus Sedan", "count": 6}
+                    {
+                        "true": "2012 Ford Focus Sedan",
+                        "predicted": "2007 Ford Focus Sedan",
+                        "count": 6,
+                    }
                 ],
                 "hardest_classes": [],
             }
@@ -57,9 +61,15 @@ def write_run(root: Path, name: str, *, backbone: str, head: str, seed: int, top
 @pytest.fixture
 def runs(tmp_path: Path) -> Path:
     root = tmp_path / "runs"
-    write_run(root, "dinov2-linear-seed0", backbone="dinov2_vits14", head="linear", seed=0, top1=0.86)
-    write_run(root, "dinov2-linear-seed1", backbone="dinov2_vits14", head="linear", seed=1, top1=0.85)
-    write_run(root, "dinov2-linear-seed2", backbone="dinov2_vits14", head="linear", seed=2, top1=0.87)
+    write_run(
+        root, "dinov2-linear-seed0", backbone="dinov2_vits14", head="linear", seed=0, top1=0.86
+    )
+    write_run(
+        root, "dinov2-linear-seed1", backbone="dinov2_vits14", head="linear", seed=1, top1=0.85
+    )
+    write_run(
+        root, "dinov2-linear-seed2", backbone="dinov2_vits14", head="linear", seed=2, top1=0.87
+    )
     write_run(root, "resnet-linear-seed0", backbone="resnet50", head="linear", seed=0, top1=0.55)
     return root
 

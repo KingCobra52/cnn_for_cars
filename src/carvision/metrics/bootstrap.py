@@ -134,8 +134,7 @@ def paired_difference_interval(
     correct_b = np.asarray(correct_b, dtype=bool)
     if len(correct_a) != len(correct_b):
         raise ValueError(
-            f"Paired comparison needs the same images: got {len(correct_a)} and "
-            f"{len(correct_b)}."
+            f"Paired comparison needs the same images: got {len(correct_a)} and {len(correct_b)}."
         )
 
     rng = np.random.default_rng(seed)

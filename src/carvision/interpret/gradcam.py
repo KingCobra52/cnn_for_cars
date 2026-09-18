@@ -205,7 +205,9 @@ def overlay(
 
     height, width = image.shape[:2]
     resized = np.asarray(
-        Image.fromarray((cam * 255).astype(np.uint8)).resize((width, height), Image.BILINEAR)
+        Image.fromarray((cam * 255).astype(np.uint8)).resize(
+            (width, height), Image.Resampling.BILINEAR
+        )
     )
 
     # mpl.colormaps[...] rather than the removed matplotlib.cm.get_cmap.

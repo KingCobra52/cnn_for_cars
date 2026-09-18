@@ -82,10 +82,7 @@ def _percent(value: float) -> str:
 
 
 def _interval(summary: RunSummary) -> str:
-    return (
-        f"{_percent(summary.top1)} "
-        f"[{100 * summary.top1_low:.1f}, {100 * summary.top1_high:.1f}]"
-    )
+    return f"{_percent(summary.top1)} [{100 * summary.top1_low:.1f}, {100 * summary.top1_high:.1f}]"
 
 
 def headline_table(summaries: list[RunSummary]) -> str:

@@ -288,7 +288,5 @@ def load_class_names() -> list[str]:
     """
     path = data_dir() / "stanford_cars" / "classes.txt"
     if not path.exists():
-        raise DatasetAcquisitionError(
-            f"{path} not found. Run `carvision data download` first."
-        )
+        raise DatasetAcquisitionError(f"{path} not found. Run `carvision data download` first.")
     return path.read_text().splitlines()

@@ -7,7 +7,6 @@ import pytest
 
 from carvision.metrics import bootstrap, calibration, classification
 
-
 # ------------------------------------------------------------------ top-k
 
 

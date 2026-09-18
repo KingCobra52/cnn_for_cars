@@ -95,9 +95,7 @@ class EmbeddingDataset(Dataset[tuple[torch.Tensor, int]]):
             ValueError: If the two arrays disagree on ``N``.
         """
         if len(embeddings) != len(labels):
-            raise ValueError(
-                f"embeddings has {len(embeddings)} rows but labels has {len(labels)}"
-            )
+            raise ValueError(f"embeddings has {len(embeddings)} rows but labels has {len(labels)}")
         self.embeddings = torch.from_numpy(np.ascontiguousarray(embeddings, dtype=np.float32))
         self.labels = torch.from_numpy(np.ascontiguousarray(labels, dtype=np.int64))
 

@@ -142,9 +142,10 @@ def confusion(logits: np.ndarray, labels: np.ndarray, num_classes: int) -> np.nd
     """
     from sklearn.metrics import confusion_matrix
 
-    return confusion_matrix(
+    matrix: np.ndarray = confusion_matrix(
         labels, logits.argmax(axis=1), labels=list(range(num_classes))
     ).astype(np.int64)
+    return matrix
 
 
 def most_confused_pairs(

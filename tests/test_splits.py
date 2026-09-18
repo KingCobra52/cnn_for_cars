@@ -39,9 +39,10 @@ def test_per_class_val_counts_are_independent_of_row_order(
     second = stratified_val_split(synthetic_labels[shuffle], seed=5)
 
     for label in np.unique(synthetic_labels):
-        assert first[synthetic_labels == label].sum() == second[
-            synthetic_labels[shuffle] == label
-        ].sum()
+        assert (
+            first[synthetic_labels == label].sum()
+            == second[synthetic_labels[shuffle] == label].sum()
+        )
 
 
 def test_every_class_appears_in_both_train_and_val(synthetic_labels: np.ndarray) -> None:
