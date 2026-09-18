@@ -1,5 +1,8 @@
-# Data and generated artifacts — never committed.
-data/
+# Data and generated artifacts. The split CSVs are the exception: they are small and
+# committing them is what lets anyone reproduce the exact evaluation set.
+# Note the `data/*` form -- git does not descend into an excluded *directory*, so
+# `data/` followed by a negation would not work.
+data/*
 !data/splits/
 artifacts/
 mlruns/

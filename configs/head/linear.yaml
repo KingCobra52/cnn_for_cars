@@ -1,0 +1,6 @@
+# @package head
+name: linear
+kind: linear
+# A linear probe on frozen features is the standard way to measure representation
+# quality, and it trains in seconds on CPU.
+dropout: 0.0

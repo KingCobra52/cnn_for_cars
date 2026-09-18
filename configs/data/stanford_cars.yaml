@@ -1,0 +1,16 @@
+# @package data
+name: stanford_cars
+num_classes: 196
+
+# The canonical Stanford AI Lab download is offline, so the dataset comes from a Hub
+# mirror. Mirrors drift; carvision.data.download.verify_mirror checks the schema at
+# download time rather than trusting this file.
+hf_repo_id: tanganke/stanford_cars
+hf_revision: null
+image_column: image
+label_column: label
+train_split: train
+test_split: test
+
+val_fraction: 0.15
+split_seed: 20260918

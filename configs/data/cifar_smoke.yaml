@@ -1,0 +1,8 @@
+# @package data
+# The legacy 3-class task, for fast end-to-end smoke tests.
+name: cifar_smoke
+num_classes: 3
+images_per_class: 5000
+test_images_per_class: 1000
+val_fraction: 0.15
+split_seed: 20260918
