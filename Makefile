@@ -31,13 +31,13 @@ lock:  ## Regenerate requirements.lock from the current environment.
 
 .PHONY: lint
 lint:  ## Run ruff (lint + format check).
-	ruff check src tests
-	ruff format --check src tests
+	ruff check src tests app
+	ruff format --check src tests app
 
 .PHONY: format
 format:  ## Autoformat and autofix.
-	ruff check --fix src tests
-	ruff format src tests
+	ruff check --fix src tests app
+	ruff format src tests app
 
 .PHONY: typecheck
 typecheck:  ## Run mypy in strict mode over src/.
@@ -85,6 +85,10 @@ eval:  ## Evaluate the best run: metrics, CIs, calibration.
 figures:  ## Regenerate every figure in docs/figures/.
 	carvision figures
 
+.PHONY: report
+report:  ## Regenerate docs/RESULTS.md from the evaluated runs.
+	carvision report
+
 .PHONY: export
 export:  ## Export to ONNX and verify parity with PyTorch.
 	carvision export --run best
@@ -95,10 +99,10 @@ bench:  ## Benchmark CPU latency, PyTorch vs ONNX Runtime.
 
 .PHONY: demo
 demo:  ## Run the Gradio demo locally.
-	$(PY) app/app.py
+	cd app && $(PY) app.py
 
 .PHONY: all
-all: data cache-all sweep zeroshot eval figures export bench  ## Full pipeline from scratch.
+all: data cache-all sweep zeroshot eval figures report export bench  ## Full pipeline from scratch.
 
 # ----------------------------------------------------------------- misc
 

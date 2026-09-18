@@ -240,7 +240,7 @@ def _write_run(
     num_classes: int,
 ) -> Path:
     """Persist the checkpoint, resolved config, and metrics for one run."""
-    from carvision.features.cache import _git_sha
+    from carvision.utils.provenance import git_sha
 
     name = f"{config.backbone}-{config.head}-seed{config.seed}"
     run_dir = ensure_dir(runs_dir() / name)
@@ -264,7 +264,7 @@ def _write_run(
                 "best_val_top1": best_val_top1,
                 "epochs_run": len(history),
                 "seconds": round(seconds, 2),
-                "git_sha": _git_sha(),
+                "git_sha": git_sha(),
                 "history": [record.__dict__ for record in history],
             },
             indent=2,

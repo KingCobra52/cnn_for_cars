@@ -37,6 +37,7 @@ from carvision.data.dataset import CarsDataset, collate_with_ids
 from carvision.models.backbones import BackboneSpec, embed_batch, get_backbone
 from carvision.utils.logging import get_logger
 from carvision.utils.paths import cache_dir, ensure_dir
+from carvision.utils.provenance import git_sha
 from carvision.utils.seed import seed_worker
 
 if TYPE_CHECKING:
@@ -113,23 +114,6 @@ def _read_manifest(directory: Path) -> dict[str, object]:
     loaded = json.loads(path.read_text())
     assert isinstance(loaded, dict)
     return loaded
-
-
-def _git_sha() -> str | None:
-    """Return the current commit, for provenance. None outside a git checkout."""
-    import subprocess
-
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return result.stdout.strip() or None
 
 
 def build(
@@ -252,7 +236,7 @@ def build(
             "dim": dim,
             "seconds": round(elapsed, 1),
             "torch_version": torch.__version__,
-            "git_sha": _git_sha(),
+            "git_sha": git_sha(),
         },
     )
     progress_path.unlink(missing_ok=True)

@@ -41,7 +41,11 @@ class LinearHead(nn.Module):
             normalize_features: Insert a non-affine LayerNorm before the linear layer.
         """
         super().__init__()
-        self.norm = nn.LayerNorm(embedding_dim, elementwise_affine=False) if normalize_features else nn.Identity()
+        self.norm = (
+            nn.LayerNorm(embedding_dim, elementwise_affine=False)
+            if normalize_features
+            else nn.Identity()
+        )
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.fc = nn.Linear(embedding_dim, num_classes)
 
@@ -72,7 +76,11 @@ class MLPHead(nn.Module):
             normalize_features: Insert a non-affine LayerNorm on the input.
         """
         super().__init__()
-        self.norm = nn.LayerNorm(embedding_dim, elementwise_affine=False) if normalize_features else nn.Identity()
+        self.norm = (
+            nn.LayerNorm(embedding_dim, elementwise_affine=False)
+            if normalize_features
+            else nn.Identity()
+        )
         self.net = nn.Sequential(
             nn.Linear(embedding_dim, hidden_dim),
             nn.GELU(),

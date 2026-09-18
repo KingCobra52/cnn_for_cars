@@ -116,6 +116,8 @@ def build_parser() -> argparse.ArgumentParser:
     figures = sub.add_parser("figures", help="Regenerate every figure under docs/figures/.")
     figures.add_argument("--run", default="best")
 
+    sub.add_parser("report", help="Regenerate docs/RESULTS.md from the evaluated runs.")
+
     return parser
 
 
@@ -303,6 +305,14 @@ def _cmd_figures(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_report(args: argparse.Namespace) -> int:
+    del args
+    from carvision.report import write
+
+    print(write())
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI.
 
@@ -328,6 +338,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "export": _cmd_export,
         "bench": _cmd_bench,
         "figures": _cmd_figures,
+        "report": _cmd_report,
     }
     try:
         return handlers[args.command](args)

@@ -17,9 +17,9 @@ RUN --mount=type=cache,target=/var/cache/apt \
 COPY app/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt fastapi uvicorn
 
-COPY app/ ./app/
-COPY src/carvision/data/transforms.py ./carvision/data/transforms.py
-COPY src/carvision/serve.py ./carvision/serve.py
+# Only app/ is needed: serving.py is self-contained and imports no torch and no
+# carvision. tests/test_serving_parity.py pins its preprocessing to the training one.
+COPY app/ ./
 
 # The serving bundle (model.onnx, classes.txt, serving.json) is mounted at runtime
 # rather than baked in, so the image does not have to be rebuilt to ship a new model:
@@ -31,4 +31,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
-CMD ["uvicorn", "carvision.serve:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
