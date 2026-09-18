@@ -213,4 +213,7 @@ def overlay(
     # mpl.colormaps[...] rather than the removed matplotlib.cm.get_cmap.
     heatmap = (mpl.colormaps[colormap](resized / 255.0)[..., :3] * 255).astype(np.uint8)
     blended = (1 - alpha) * image.astype(np.float32) + alpha * heatmap.astype(np.float32)
-    return np.clip(blended, 0, 255).astype(np.uint8)
+    # Bound to a typed local: newer numpy stubs type np.clip's result as Any, which
+    # trips mypy's no-any-return under strict mode.
+    overlaid: np.ndarray = np.clip(blended, 0, 255).astype(np.uint8)
+    return overlaid
