@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch keeps the CI image small and fast.
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,export]"
+
+      - name: Lint
+        run: |
+          ruff check src tests
+          ruff format --check src tests
+
+      - name: Typecheck
+        run: mypy
+
+      - name: Test
+        # The suite runs entirely on synthetic fixtures: no dataset, no network.
+        run: pytest -m "not slow" --cov-report=xml
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+
+  notebooks-clean:
+    name: notebooks have no committed outputs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install nbstripout
+      - name: Verify every notebook is stripped
+        run: |
+          status=0
+          while IFS= read -r nb; do
+            if ! nbstripout --verify "$nb"; then
+              echo "::error file=$nb::notebook has committed outputs; run 'nbstripout $nb'"
+              status=1
+            fi
+          done < <(find . -name '*.ipynb' -not -path './.git/*')
+          exit $status

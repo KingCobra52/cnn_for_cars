@@ -1,0 +1,38 @@
+# Data and generated artifacts — never committed.
+data/
+!data/splits/
+artifacts/
+mlruns/
+outputs/
+.cache/
+*.onnx
+*.pt
+*.pth
+*.npy
+!tests/fixtures/*.npy
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.eggs/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
