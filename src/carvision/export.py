@@ -368,16 +368,19 @@ def prepare_serving_bundle(
     backbone_name = str(payload["backbone"])
     spec = get_backbone(backbone_name)
 
+    # Resolve once and reuse, so the graph and the metadata cannot describe different
+    # models. Writing the evaluation's temperature here while folding an override into
+    # the graph would make serving.json quietly wrong about the file beside it.
+    applied_temperature = (
+        temperature if temperature is not None else float(evaluation["calibration"]["temperature"])
+    )
+
     ensure_dir(output_dir)
     result = export(
         backbone_name,
         head,
         output_dir / "model.onnx",
-        temperature=(
-            temperature
-            if temperature is not None
-            else float(evaluation["calibration"]["temperature"])
-        ),
+        temperature=applied_temperature,
     )
 
     (output_dir / "classes.txt").write_text("\n".join(load_class_names()) + "\n")
@@ -389,7 +392,8 @@ def prepare_serving_bundle(
                 "head": payload["head_kind"],
                 "num_classes": payload["num_classes"],
                 "preprocess": asdict(spec.preprocess),
-                "temperature": evaluation["calibration"]["temperature"],
+                "temperature": applied_temperature,
+                "temperature_from_evaluation": float(evaluation["calibration"]["temperature"]),
                 "metrics": {
                     "top1": evaluation["metrics"]["top1"],
                     "top5": evaluation["metrics"]["top5"],
