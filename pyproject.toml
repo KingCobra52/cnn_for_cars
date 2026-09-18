@@ -50,6 +50,9 @@ dev = [
 export = [
   "onnx>=1.16",
   "onnxruntime>=1.17",
+  # torch.onnx.export defaults to the dynamo exporter from torch 2.9, which imports
+  # onnxscript. Without it the export raises ModuleNotFoundError at call time.
+  "onnxscript>=0.1",
 ]
 app = [
   "gradio>=4.26",

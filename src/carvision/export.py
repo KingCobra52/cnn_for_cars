@@ -136,6 +136,9 @@ def export(
         input_names=["images"],
         output_names=["logits"],
         # A dynamic batch axis lets the same graph serve one image or a hundred.
+        # The dynamo exporter warns that it prefers `dynamic_shapes`; `dynamic_axes`
+        # works correctly here and `tests/test_export.py` exercises the batch axis
+        # explicitly, so the warning is expected rather than a latent problem.
         dynamic_axes={"images": {0: "batch"}, "logits": {0: "batch"}},
         opset_version=OPSET,
         do_constant_folding=True,
