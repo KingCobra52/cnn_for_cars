@@ -16,7 +16,7 @@ from typing import Any
 
 from carvision.metrics.bootstrap import seed_spread
 from carvision.utils.logging import get_logger
-from carvision.utils.paths import repo_root, runs_dir
+from carvision.utils.paths import ensure_dir, repo_root, runs_dir
 
 logger = get_logger(__name__)
 
@@ -242,6 +242,10 @@ def write(output_path: Path | None = None) -> Path:
         The path written.
     """
     path = output_path or (repo_root() / "docs" / "RESULTS.md")
+    # Create the directory rather than assuming it, the way figures._save does. It is
+    # absent whenever carvision runs outside a checkout, or when --out names a new
+    # location, and the failure is otherwise a bare FileNotFoundError.
+    ensure_dir(path.parent)
     path.write_text(render(collect_runs()))
     logger.info("Wrote %s", path)
     return path
