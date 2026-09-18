@@ -117,7 +117,7 @@ at the car, or at the parking lot behind it?
 ## Reproducing
 
 ```bash
-make setup                 # venv + install + pre-commit hooks
+make setup                 # venv + CPU-only torch + install + pre-commit hooks
 make data                  # download Stanford Cars, write the deterministic splits
 make cache-all             # embed with all three backbones — the slow step, ~40 min each
 make sweep                 # 30 runs; minutes, because the embeddings are cached
@@ -126,6 +126,14 @@ make export bench          # ONNX export with parity check, plus latency numbers
 ```
 
 Or `make all` for the lot. `make check` runs what CI runs: ruff, mypy strict, pytest.
+
+`make setup` installs the CPU build of PyTorch, since the whole project is designed around
+not having a GPU — the default PyPI wheel would pull ~2.5 GB of CUDA libraries that do
+nothing here. On a GPU machine, override the index:
+`make setup TORCH_INDEX=https://download.pytorch.org/whl/cu124`.
+
+For the exact versions this was developed against, `make sync` installs from
+`requirements.lock` instead of resolving fresh.
 
 The test suite needs neither the dataset nor a network — every test runs on synthetic
 fixtures — so a fresh clone is green in seconds.
