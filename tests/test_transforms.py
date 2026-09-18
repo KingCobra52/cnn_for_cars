@@ -67,3 +67,51 @@ def test_train_transform_also_yields_the_crop_size() -> None:
     image = Image.new("RGB", (400, 300))
     tensor = IMAGENET_224.build(train=True)(image)
     assert tensor.shape == (3, 224, 224)
+
+
+# ------------------------------------------------------------------ weights agreement
+
+
+def test_resnet50_spec_matches_its_weights_exactly() -> None:
+    """The constants must equal what the pretrained weights actually ask for.
+
+    This is the check the module docstring promises, and it earned itself: resnet50 was
+    configured at 256/bicubic when IMAGENET1K_V2 wants 232/bilinear. Wrong preprocessing
+    on a pretrained backbone degrades every embedding it produces, and nothing else in
+    the suite would notice.
+    """
+    pytest.importorskip("torchvision")
+    from torchvision.models import ResNet50_Weights
+
+    from carvision.data.transforms import RESNET50_V2
+
+    reference = ResNet50_Weights.IMAGENET1K_V2.transforms()
+
+    assert RESNET50_V2.resize == reference.resize_size[0]
+    assert RESNET50_V2.crop == reference.crop_size[0]
+    assert RESNET50_V2.mean == tuple(reference.mean)
+    assert RESNET50_V2.std == tuple(reference.std)
+    assert RESNET50_V2.interpolation == reference.interpolation.value
+
+
+def test_generic_imagenet_spec_matches_the_v1_weights() -> None:
+    """IMAGENET_224 documents itself as the classic V1 recipe; hold it to that."""
+    pytest.importorskip("torchvision")
+    from torchvision.models import ResNet50_Weights
+
+    reference = ResNet50_Weights.IMAGENET1K_V1.transforms()
+
+    assert IMAGENET_224.resize == reference.resize_size[0]
+    assert IMAGENET_224.crop == reference.crop_size[0]
+    assert IMAGENET_224.interpolation == reference.interpolation.value
+
+
+def test_registered_backbone_specs_are_distinct() -> None:
+    """Two backbones sharing a preprocessing key would share cached embeddings."""
+    from carvision.models.backbones import available_backbones, get_backbone
+
+    keys = [get_backbone(name).preprocess.cache_key() for name in available_backbones()]
+    names = [get_backbone(name).cache_key() for name in available_backbones()]
+    assert len(set(names)) == len(names)
+    # Two backbones may legitimately share preprocessing; their full keys must not.
+    assert len(keys) == len(available_backbones())

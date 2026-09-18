@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from carvision.config import DataConfig, load_data_config
 from carvision.utils.logging import get_logger
 from carvision.utils.paths import data_dir, ensure_dir
 
@@ -152,8 +153,24 @@ def verify_mirror(dataset_dict: Any, spec: MirrorSpec) -> None:
         )
 
 
-def _iter_rows(split_dataset: Any, spec: MirrorSpec, split: str) -> Iterator[dict[str, Any]]:
-    """Yield one manifest row per example, writing its image to disk as it goes."""
+def _iter_rows(
+    split_dataset: Any,
+    spec: MirrorSpec,
+    split: str,
+    *,
+    overwrite: bool = False,
+) -> Iterator[dict[str, Any]]:
+    """Yield one manifest row per example, writing its image to disk as it goes.
+
+    Args:
+        split_dataset: The mirror's split.
+        spec: How to read the mirror's columns.
+        split: ``train`` or ``test``.
+        overwrite: Rewrite images that already exist. This must be true for a forced
+            re-download: skipping existing files would keep the *previous* mirror's
+            images while adopting the new mirror's labels, silently mislabelling the
+            whole dataset.
+    """
     out_dir = ensure_dir(data_dir() / "stanford_cars" / "images" / split)
 
     for index in range(len(split_dataset)):
@@ -163,7 +180,7 @@ def _iter_rows(split_dataset: Any, spec: MirrorSpec, split: str) -> Iterator[dic
 
         image_id = f"{split}_{index:05d}"
         path = out_dir / f"{image_id}.jpg"
-        if not path.exists():
+        if overwrite or not path.exists():
             # A handful of Stanford Cars images are greyscale; normalise to RGB once,
             # here, so no downstream consumer has to care.
             image.convert("RGB").save(path, format="JPEG", quality=95)
@@ -191,6 +208,7 @@ def download(
     *,
     revision: str | None = None,
     force: bool = False,
+    config: DataConfig | None = None,
     **overrides: str,
 ) -> Path:
     """Download Stanford Cars and write the local image folder and manifest.
@@ -198,10 +216,11 @@ def download(
     Idempotent: an existing, complete download is reused unless ``force`` is set.
 
     Args:
-        repo_id: Hub dataset repo id. Defaults to :data:`DEFAULT_MIRROR`.
+        repo_id: Hub dataset repo id. Defaults to the one in the data config.
         revision: Optional Hub revision to pin, recorded in ``download.json``.
         force: Re-download and rewrite even if a complete manifest exists.
-        **overrides: :class:`MirrorSpec` field overrides for an unverified mirror.
+        config: Data configuration. Defaults to ``configs/data/stanford_cars.yaml``.
+        **overrides: :class:`MirrorSpec` field overrides, applied on top of the config.
 
     Returns:
         The dataset root, ``data/stanford_cars``.
@@ -227,7 +246,12 @@ def download(
             EXPECTED_TOTAL,
         )
 
-    spec = resolve_mirror(repo_id, **overrides)
+    settings = config or load_data_config()
+    spec = resolve_mirror(
+        repo_id or settings.hf_repo_id,
+        **{**settings.mirror_overrides(), **overrides},
+    )
+    revision = revision or settings.hf_revision
     logger.info("Loading %s from the Hugging Face Hub...", spec.repo_id)
 
     from datasets import load_dataset
@@ -241,7 +265,7 @@ def download(
     rows: list[dict[str, Any]] = []
     for split, mirror_split in (("train", spec.train_split), ("test", spec.test_split)):
         logger.info("Materialising %s split...", split)
-        split_rows = list(_iter_rows(dataset_dict[mirror_split], spec, split))
+        split_rows = list(_iter_rows(dataset_dict[mirror_split], spec, split, overwrite=force))
         expected = EXPECTED_SPLIT_SIZES[split]
         if len(split_rows) != expected:
             logger.warning(

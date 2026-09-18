@@ -156,7 +156,7 @@ src/carvision/
 ├── export.py      ONNX export + parity verification + latency benchmark
 └── figures.py     every figure, generated from evaluation output
 app/               Gradio demo (ONNX Runtime, no torch)
-configs/           Hydra: backbone × head × data
+configs/           dataset acquisition (the mirror, columns, split seed)
 notebooks/legacy/  the project this replaced, and what was wrong with it
 ```
 

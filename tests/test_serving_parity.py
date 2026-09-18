@@ -27,6 +27,7 @@ from carvision.data.transforms import (  # noqa: E402
     CLIP_224,
     DINOV2_224,
     IMAGENET_224,
+    RESNET50_V2,
     PreprocessSpec,
 )
 
@@ -62,7 +63,7 @@ def test_serving_module_imports_no_torch() -> None:
 # ------------------------------------------------------------------ parity
 
 
-@pytest.mark.parametrize("spec", [IMAGENET_224, CLIP_224, DINOV2_224])
+@pytest.mark.parametrize("spec", [IMAGENET_224, CLIP_224, DINOV2_224, RESNET50_V2])
 @pytest.mark.parametrize("size", [(400, 300), (300, 400), (224, 224), (1000, 640)])
 def test_preprocessing_matches_torchvision(spec: PreprocessSpec, size: tuple[int, int]) -> None:
     """Both implementations must produce the same tensor, for every backbone and shape.
@@ -74,7 +75,12 @@ def test_preprocessing_matches_torchvision(spec: PreprocessSpec, size: tuple[int
 
     reference = spec.build(train=False)(image).numpy()[None]
     actual = serving.preprocess(
-        image, resize=spec.resize, crop=spec.crop, mean=spec.mean, std=spec.std
+        image,
+        resize=spec.resize,
+        crop=spec.crop,
+        mean=spec.mean,
+        std=spec.std,
+        interpolation=spec.interpolation,
     )
 
     assert actual.shape == reference.shape

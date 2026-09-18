@@ -43,7 +43,16 @@ def build_parser() -> argparse.ArgumentParser:
     data_sub = data.add_subparsers(dest="data_command", required=True)
 
     download = data_sub.add_parser("download", help="Fetch Stanford Cars from the Hub.")
-    download.add_argument("--repo-id", default=None, help="Hub dataset repo id.")
+    download.add_argument(
+        "--repo-id",
+        default=None,
+        help="Hub dataset repo id. Defaults to hf_repo_id in configs/data/stanford_cars.yaml.",
+    )
+    download.add_argument(
+        "--data-config",
+        default="stanford_cars",
+        help="Name of the config under configs/data/ to read.",
+    )
     download.add_argument("--revision", default=None, help="Hub revision to pin.")
     download.add_argument("--image-column", default=None)
     download.add_argument("--label-column", default=None)
@@ -52,8 +61,16 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--force", action="store_true", help="Re-download.")
 
     split = data_sub.add_parser("split", help="Write the deterministic split CSVs.")
-    split.add_argument("--val-fraction", type=float, default=0.15)
-    split.add_argument("--seed", type=int, default=20260918)
+    split.add_argument(
+        "--val-fraction",
+        type=float,
+        default=None,
+        help="Overrides val_fraction from the data config.",
+    )
+    split.add_argument(
+        "--seed", type=int, default=None, help="Overrides split_seed from the data config."
+    )
+    split.add_argument("--data-config", default="stanford_cars")
     split.add_argument(
         "--overwrite",
         action="store_true",
@@ -136,14 +153,26 @@ def _cmd_data(args: argparse.Namespace) -> int:
             )
             if value is not None
         }
+        from carvision.config import load_data_config
+
+        settings = load_data_config(args.data_config)
         root = download_module.download(
-            args.repo_id, revision=args.revision, force=args.force, **overrides
+            args.repo_id,
+            revision=args.revision,
+            force=args.force,
+            config=settings,
+            **overrides,
         )
         logger.info("Dataset ready at %s", root)
         return 0
 
+    from carvision.config import load_data_config
+
+    settings = load_data_config(args.data_config)
     sizes = splits_module.build_splits(
-        val_fraction=args.val_fraction, seed=args.seed, overwrite=args.overwrite
+        val_fraction=args.val_fraction if args.val_fraction is not None else settings.val_fraction,
+        seed=args.seed if args.seed is not None else settings.split_seed,
+        overwrite=args.overwrite,
     )
     logger.info(
         "Splits written: %d train / %d val / %d test (%d total)",

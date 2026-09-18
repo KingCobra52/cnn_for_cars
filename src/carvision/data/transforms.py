@@ -5,11 +5,20 @@ preprocessing: a pretrained ImageNet VGG16 was fed 32x32 tensors normalised with
 CIFAR-10 statistics. It still scored 85% because the task was trivial, which is exactly
 what made the bug invisible.
 
-The fix is structural, not a matter of care. A transform is never constructed by hand
-here; it is obtained from the same weights object that supplies the pretrained
-parameters, so input size and normalisation statistics cannot drift apart. Where a
-backbone ships no transform (DINOv2 via torch.hub), the constants live next to that
-backbone's definition and are covered by a test.
+The fix is structural, not a matter of care: a :class:`PreprocessSpec` is bound to a
+backbone's weights in the registry, so selecting a backbone selects its preprocessing
+and the two cannot drift apart at a call site.
+
+The specs are written out as constants rather than read from the weights object at
+runtime, because they are hashed into the embedding cache key and so must be stable,
+inspectable values rather than whatever the installed torchvision happens to return.
+That makes them a claim about the weights, and a claim needs checking: for every
+torchvision backbone, ``tests/test_transforms.py`` asserts the constants here match
+``Weights.transforms()`` exactly, so a torchvision change or a transcription error fails
+CI instead of quietly costing accuracy.
+
+That check earned itself immediately. ``resnet50`` was configured at 256/bicubic; the
+IMAGENET1K_V2 weights actually want 232/bilinear.
 """
 
 from __future__ import annotations
@@ -112,8 +121,19 @@ def dtype_scale_placeholder() -> object:
     return torch.float32
 
 
-#: Preprocessing for backbones whose weights object does not supply a transform.
-IMAGENET_224 = PreprocessSpec(resize=256, crop=224, mean=IMAGENET_MEAN, std=IMAGENET_STD)
+#: Generic ImageNet preprocessing: the classic 256/224 crop, bilinear.
+#: Matches ``ResNet50_Weights.IMAGENET1K_V1.transforms()``.
+IMAGENET_224 = PreprocessSpec(
+    resize=256, crop=224, mean=IMAGENET_MEAN, std=IMAGENET_STD, interpolation="bilinear"
+)
+
+#: Preprocessing for ``ResNet50_Weights.IMAGENET1K_V2``. The V2 weights were trained with
+#: a different recipe and want a 232-pixel shorter side, not 256. Feeding them the V1
+#: transform costs roughly a point of ImageNet top-1, and correspondingly degrades the
+#: features this project extracts from them.
+RESNET50_V2 = PreprocessSpec(
+    resize=232, crop=224, mean=IMAGENET_MEAN, std=IMAGENET_STD, interpolation="bilinear"
+)
 CLIP_224 = PreprocessSpec(resize=224, crop=224, mean=CLIP_MEAN, std=CLIP_STD)
 
 #: DINOv2 uses a patch size of 14, so its input side must be a multiple of 14.

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 import torch
 from torch import nn
 
-from carvision.data.transforms import CLIP_224, DINOV2_224, IMAGENET_224, PreprocessSpec
+from carvision.data.transforms import CLIP_224, DINOV2_224, RESNET50_V2, PreprocessSpec
 from carvision.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -148,7 +148,7 @@ REGISTRY: dict[str, BackboneSpec] = {
         name="resnet50",
         weights_tag="IMAGENET1K_V2",
         embedding_dim=2048,
-        preprocess=IMAGENET_224,
+        preprocess=RESNET50_V2,
         factory=_resnet50,
         gradcam_layer="layer4",
     ),

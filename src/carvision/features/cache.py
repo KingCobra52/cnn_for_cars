@@ -36,7 +36,7 @@ from torch.utils.data import DataLoader
 from carvision.data.dataset import CarsDataset, collate_with_ids
 from carvision.models.backbones import BackboneSpec, embed_batch, get_backbone
 from carvision.utils.logging import get_logger
-from carvision.utils.paths import cache_dir, ensure_dir
+from carvision.utils.paths import cache_dir, data_dir, ensure_dir
 from carvision.utils.provenance import git_sha
 from carvision.utils.seed import seed_worker
 
@@ -45,8 +45,10 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-#: Bump when the on-disk layout changes in a way older caches cannot satisfy.
-CACHE_FORMAT_VERSION = 1
+#: Bump when the on-disk layout or the cache key changes in a way older caches cannot
+#: satisfy. Version 2 added labels and the dataset fingerprint to the key; version 1
+#: keyed on positional image ids alone and so could not tell two datasets apart.
+CACHE_FORMAT_VERSION = 2
 
 #: Rows written per flush. Small enough that a laptop going to sleep costs little,
 #: large enough that the manifest write is not the bottleneck.
@@ -78,12 +80,51 @@ class CacheEntry:
     directory: Path
 
 
-def compute_cache_key(spec: BackboneSpec, image_ids: Sequence[str]) -> str:
+def dataset_fingerprint() -> str:
+    """Return a digest identifying the downloaded dataset, or ``"unknown"``.
+
+    Read from ``download.json``, which :func:`carvision.data.download.download` writes
+    with a checksum over every image id, split and label. Two different mirrors produce
+    different fingerprints even when they happen to contain the same number of images.
+
+    Returns:
+        The manifest checksum, or ``"unknown"`` when the dataset was not produced by
+        this project's downloader (a hand-assembled directory, or a test fixture).
+    """
+    path = data_dir() / "stanford_cars" / "download.json"
+    if not path.exists():
+        return "unknown"
+    try:
+        return str(json.loads(path.read_text()).get("manifest_sha256", "unknown"))
+    except (json.JSONDecodeError, OSError):
+        return "unknown"
+
+
+def compute_cache_key(
+    spec: BackboneSpec,
+    image_ids: Sequence[str],
+    labels: Sequence[int] | np.ndarray | None = None,
+    *,
+    fingerprint: str | None = None,
+) -> str:
     """Hash everything that determines the embeddings.
+
+    Correctness of the whole project rests on this. If the key fails to change when the
+    inputs change, stale embeddings are served silently and every downstream number is
+    wrong with no test failing.
+
+    Image ids alone are not enough, which is a defect this function previously had. They
+    are positional (``train_00000``), so swapping the dataset mirror for one with the
+    same image count produced an identical key -- and the cache then served the old
+    mirror's embeddings against the new mirror's labels. The labels and a fingerprint of
+    the downloaded dataset are therefore part of the key as well.
 
     Args:
         spec: The backbone, which carries both its weights tag and its preprocessing.
         image_ids: The images to embed, in the order they will be embedded.
+        labels: Class ids aligned with ``image_ids``. Optional only so that a caller
+            checking key stability need not supply them; production callers always do.
+        fingerprint: Dataset fingerprint. Defaults to :func:`dataset_fingerprint`.
 
     Returns:
         A 16-character hex digest. Truncated because it names a directory and full
@@ -92,9 +133,23 @@ def compute_cache_key(spec: BackboneSpec, image_ids: Sequence[str]) -> str:
     digest = hashlib.sha256()
     digest.update(f"v{CACHE_FORMAT_VERSION}\n".encode())
     digest.update(f"{spec.cache_key()}\n".encode())
+    digest.update(
+        f"dataset={fingerprint if fingerprint is not None else dataset_fingerprint()}\n".encode()
+    )
     digest.update(f"n={len(image_ids)}\n".encode())
-    for image_id in image_ids:
-        digest.update(f"{image_id}\n".encode())
+
+    if labels is None:
+        for image_id in image_ids:
+            digest.update(f"{image_id}\n".encode())
+    else:
+        if len(labels) != len(image_ids):
+            raise ValueError(
+                f"{len(image_ids)} image ids but {len(labels)} labels; they must align."
+            )
+        # The separator matters: without it ["ab", "c"] and ["a", "bc"] would collide.
+        for image_id, label in zip(image_ids, labels, strict=True):
+            digest.update(f"{image_id}:{int(label)}\n".encode())
+
     return digest.hexdigest()[:16]
 
 
@@ -145,7 +200,7 @@ def build(
     spec = get_backbone(backbone)
     dataset = CarsDataset(split, transform=spec.preprocess.build(train=False))
 
-    key = compute_cache_key(spec, dataset.image_ids)
+    key = compute_cache_key(spec, dataset.image_ids, dataset.labels)
     directory = entry_dir(backbone, split, key)
 
     if not force and is_complete(directory, len(dataset)):
@@ -232,6 +287,7 @@ def build(
             "weights_tag": spec.weights_tag,
             "preprocess": asdict(spec.preprocess),
             "split": split,
+            "dataset_fingerprint": dataset_fingerprint(),
             "num_rows": num_rows,
             "dim": dim,
             "seconds": round(elapsed, 1),

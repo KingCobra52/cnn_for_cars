@@ -31,6 +31,7 @@ class RunSummary:
     backbone: str
     head: str
     seed: int
+    val_top1: float
     top1: float
     top5: float
     macro_f1: float
@@ -57,6 +58,7 @@ def collect_runs(root: Path | None = None) -> list[RunSummary]:
         run_dir = evaluation_path.parent
         evaluation = json.loads(evaluation_path.read_text())
         config = json.loads((run_dir / "config.json").read_text())
+        metrics = json.loads((run_dir / "metrics.json").read_text())
 
         summaries.append(
             RunSummary(
@@ -64,6 +66,7 @@ def collect_runs(root: Path | None = None) -> list[RunSummary]:
                 backbone=str(config["backbone"]),
                 head=str(config["head"]),
                 seed=int(config["seed"]),
+                val_top1=float(metrics["best_val_top1"]),
                 top1=float(evaluation["metrics"]["top1"]),
                 top5=float(evaluation["metrics"]["top5"]),
                 macro_f1=float(evaluation["metrics"]["macro_f1"]),
@@ -102,12 +105,16 @@ def headline_table(summaries: list[RunSummary]) -> str:
         "| Backbone | Head | Top-1 (95% CI) | Top-5 | Macro-F1 | Seeds |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
+    # Ordered by validation accuracy. Ordering by test accuracy would be a selection
+    # decision made on the test set, in the very document whose premise is that no
+    # number here is fudged.
     for (backbone, head), runs in sorted(
-        grouped.items(), key=lambda item: -max(r.top1 for r in item[1])
+        grouped.items(), key=lambda item: -max(r.val_top1 for r in item[1])
     ):
-        # Report the median-accuracy seed's interval, with the seed spread beside it, so
-        # the row shows both sources of uncertainty rather than the luckiest run.
-        ordered = sorted(runs, key=lambda r: r.top1)
+        # The representative seed is the median *by validation*, with the seed spread
+        # beside it, so the row shows both sources of uncertainty and picks its
+        # representative without consulting test.
+        ordered = sorted(runs, key=lambda r: r.val_top1)
         representative = ordered[len(ordered) // 2]
         spread = seed_spread([r.top1 for r in runs])
 
@@ -151,7 +158,7 @@ def calibration_table(summaries: list[RunSummary]) -> str:
         "| Run | ECE (raw) | ECE (scaled) | Temperature |",
         "| --- | --- | --- | --- |",
     ]
-    for summary in sorted(summaries, key=lambda s: -s.top1):
+    for summary in sorted(summaries, key=lambda s: -s.val_top1):
         calibration = summary.evaluation["calibration"]
         lines.append(
             f"| `{summary.name}` | {calibration['before']['ece']:.4f} "
@@ -178,7 +185,10 @@ def render(summaries: list[RunSummary]) -> str:
             "No evaluated runs found. Run `carvision sweep` then `carvision eval` first."
         )
 
-    best = max(summaries, key=lambda s: s.top1)
+    # Selected on validation, matching carvision.eval.find_best_run. Picking the run
+    # with the highest *test* score and then reporting that score is selection on the
+    # test set, and it biases the headline number upward.
+    best = max(summaries, key=lambda s: s.val_top1)
     errors = best.evaluation["errors"]
 
     return f"""# Results
