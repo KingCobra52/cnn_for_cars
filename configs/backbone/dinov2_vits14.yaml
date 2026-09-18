@@ -1,0 +1,8 @@
+# @package backbone
+name: dinov2_vits14
+kind: torch_hub
+repo: facebookresearch/dinov2
+entrypoint: dinov2_vits14
+embedding_dim: 384
+preprocess: dinov2_224
+gradcam_layer: null

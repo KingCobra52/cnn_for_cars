@@ -1,0 +1,13 @@
+# Hugging Face Spaces (free CPU tier). Deliberately minimal: no torch, no torchvision.
+# The exported ONNX graph carries the whole model, so the Space needs only a runtime
+# and the preprocessing -- which keeps the image small and cold starts short.
+gradio>=4.26
+onnxruntime>=1.17
+pillow>=10.2
+numpy>=1.26
+huggingface-hub>=0.22
+
+# Only needed for api.py (the FastAPI service); the Gradio Space does not import it.
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6

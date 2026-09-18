@@ -1,0 +1,10 @@
+# @package backbone
+name: clip_vitb32
+kind: open_clip
+model_name: ViT-B-32
+pretrained: openai
+embedding_dim: 512
+preprocess: clip_224
+# CLIP has a text tower, so it supports a training-free zero-shot baseline.
+supports_zeroshot: true
+gradcam_layer: null

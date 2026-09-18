@@ -1,0 +1,5 @@
+# @package head
+name: mlp
+kind: mlp
+hidden_dim: 1024
+dropout: 0.3

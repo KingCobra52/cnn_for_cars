@@ -1,0 +1,159 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carvision"
+version = "1.0.0"
+description = "Fine-grained car classification on Stanford Cars, built under a CPU-only constraint."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Siddarth Vadder" }]
+keywords = ["computer-vision", "fine-grained-classification", "transfer-learning", "onnx"]
+classifiers = [
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+  "torch>=2.2",
+  "torchvision>=0.17",
+  "numpy>=1.26",
+  "pillow>=10.2",
+  "scikit-learn>=1.4",
+  "pandas>=2.2",
+  "matplotlib>=3.8",
+  "seaborn>=0.13",
+  "tqdm>=4.66",
+  "hydra-core>=1.3",
+  "omegaconf>=2.3",
+  "mlflow>=2.11",
+  "huggingface-hub>=0.22",
+  "datasets>=2.18",
+  "open-clip-torch>=2.24",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.4",
+  "mypy>=1.9",
+  "nbstripout>=0.7",
+  "pre-commit>=3.7",
+  "types-tqdm",
+  "pandas-stubs",
+]
+export = [
+  "onnx>=1.16",
+  "onnxruntime>=1.17",
+  # torch.onnx.export defaults to the dynamo exporter from torch 2.9, which imports
+  # onnxscript. Without it the export raises ModuleNotFoundError at call time.
+  "onnxscript>=0.1",
+]
+app = [
+  "gradio>=4.26",
+  "onnxruntime>=1.17",
+]
+serve = [
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "pydantic>=2.6",
+]
+
+[project.scripts]
+carvision = "carvision.cli:main"
+
+[project.urls]
+Repository = "https://github.com/KingCobra52/cnn_for_cars"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+carvision = ["py.typed"]
+
+# ---------------------------------------------------------------- ruff
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "app"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",    # pycodestyle
+  "F",         # pyflakes
+  "I",         # isort
+  "N",         # pep8-naming
+  "UP",        # pyupgrade
+  "B",         # bugbear
+  "C4",        # comprehensions
+  "SIM",       # simplify
+  "ARG",       # unused arguments
+  "PTH",       # use pathlib
+  "RUF",       # ruff-specific
+  "D",         # pydocstyle
+]
+ignore = [
+  "D105",  # magic method docstrings
+  "D107",  # __init__ docstring (documented on the class)
+  "D203",  # incompatible with D211
+  "D213",  # incompatible with D212
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D100", "D101", "D102", "D103", "ARG001", "ARG002"]
+# app/ is a standalone deployment bundle: its modules import each other by bare name
+# (serving, api), which is correct there and not resolvable as a package here.
+"app/*" = ["D103", "E402"]
+"notebooks/*" = ["D", "E402"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# ---------------------------------------------------------------- mypy
+
+[tool.mypy]
+# Deliberately not pinning python_version: the CI matrix runs 3.11 and 3.12, and a pin
+# makes mypy reject the PEP 695 `type` statements in the 3.12 numpy stubs. Letting mypy
+# follow the running interpreter is what actually checks each matrix entry.
+strict = true
+warn_unreachable = true
+disallow_untyped_defs = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+# These ship without type information.
+module = [
+  "torchvision.*",
+  "sklearn.*",
+  "seaborn.*",
+  "matplotlib.*",
+  "mlflow.*",
+  "datasets.*",
+  "open_clip.*",
+  "onnxruntime.*",
+  "gradio.*",
+  "hydra.*",
+]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------- pytest
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --cov=carvision --cov-report=term-missing"
+markers = [
+  "slow: requires the real dataset or a network download (deselect with '-m \"not slow\"')",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/carvision"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
