@@ -224,9 +224,23 @@ def generate_all(run_dir: Path) -> list[Path]:
     evaluation = json.loads(evaluation_path.read_text())
     predictions = dict(np.load(predictions_path, allow_pickle=False))
 
-    return [
+    paths = [
         training_curves(run_dir),
         reliability_diagram(evaluation, predictions),
         error_structure(evaluation),
         confusion_overview(predictions),
     ]
+
+    from carvision.utils.artifacts import dependencies
+
+    (figures_dir() / "provenance.json").write_text(
+        json.dumps(
+            dependencies(
+                [evaluation_path, predictions_path, run_dir / "metrics.json", *paths],
+                "carvision figures",
+            ),
+            indent=2,
+        )
+        + "\n"
+    )
+    return paths

@@ -123,10 +123,19 @@ def build_splits(
         raise SplitError(f"{manifest_path} not found. Run `carvision data download` first.")
 
     out_dir = ensure_dir(splits_dir())
+    from carvision.utils.artifacts import publish, recover
+
+    journal = out_dir / ".publication.json"
+    if journal.exists():
+        if not overwrite:
+            raise SplitError("Interrupted split publication; rerun with --overwrite")
+        recover(journal)
     existing = [out_dir / f"{s}.csv" for s in SPLIT_NAMES]
     provenance_path = out_dir / "provenance.json"
     if any(p.exists() for p in existing) or provenance_path.exists():
-        if not all(p.exists() for p in existing) or not provenance_path.exists():
+        if not overwrite and (
+            not all(p.exists() for p in existing) or not provenance_path.exists()
+        ):
             raise SplitError(
                 "Partial split set or provenance found; restore all four files or use --overwrite"
             )
@@ -182,9 +191,10 @@ def build_splits(
     ):
         raise SplitError("Generated test split does not exactly match official test manifest")
 
-    for name, frame in frames.items():
-        frame.to_csv(out_dir / f"{name}.csv", index=False, columns=columns)
-        logger.info("%-5s %5d images, %3d classes", name, len(frame), frame["label_id"].nunique())
+    contents = {
+        out_dir / f"{name}.csv": frame.to_csv(index=False, columns=columns).encode()
+        for name, frame in frames.items()
+    }
 
     download_path = data_dir() / "stanford_cars" / "download.json"
     download = json.loads(download_path.read_text()) if download_path.exists() else {}
@@ -198,12 +208,13 @@ def build_splits(
         "split_parameters": {"val_fraction": val_fraction, "seed": seed},
         "counts": {name: len(frame) for name, frame in frames.items()},
         "csv_sha256": {
-            name: hashlib.sha256((out_dir / f"{name}.csv").read_bytes()).hexdigest()
+            name: hashlib.sha256(contents[out_dir / f"{name}.csv"]).hexdigest()
             for name in SPLIT_NAMES
         },
         "generation_libraries": {"numpy": np.__version__, "pandas": pd.__version__},
     }
-    provenance_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    contents[provenance_path] = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+    publish(contents, journal)
     return SplitSizes(**payload["counts"])
 
 
@@ -213,6 +224,8 @@ def validate_splits(
     """Validate committed split files against the local dataset and provenance."""
     import pandas as pd
 
+    if (splits_dir() / ".publication.json").exists():
+        raise SplitError("Interrupted split publication; rerun with --overwrite")
     manifest = pd.read_csv(data_dir() / "stanford_cars" / "manifest.csv")
     path = splits_dir() / "provenance.json"
     if not path.exists():

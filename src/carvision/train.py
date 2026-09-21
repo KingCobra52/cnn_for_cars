@@ -379,6 +379,8 @@ def sweep(
         for split in ("train", "val", "test"):
             cache.build(backbone, split)
 
+    training_started = time.monotonic()
+    for backbone in backbones:
         for head in heads:
             for seed in seeds:
                 config = TrainConfig(
@@ -386,6 +388,17 @@ def sweep(
                 )
                 results.append(train(config))
 
+    from carvision.utils.artifacts import dependencies
+
+    timing = {
+        "seconds": time.monotonic() - training_started,
+        "provenance": dependencies(
+            [artifacts_dir() / "sweep_manifest.json"]
+            + [r.run_dir / "metrics.json" for r in results],
+            "carvision sweep",
+        ),
+    }
+    (artifacts_dir() / "sweep_timing.json").write_text(json.dumps(timing, indent=2) + "\n")
     accuracies = np.array([r.best_val_top1 for r in results])
     logger.info(
         "Sweep finished: %d runs, val top-1 %.2f%% +/- %.2f%%",

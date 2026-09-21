@@ -51,9 +51,13 @@ revision used are recorded in `data/stanford_cars/download.json`.
 - Roughly **40 training images per class**. The tail classes are learned from very
   little.
 
+The downloaded mirror's content audit records 39 exact-content duplicate groups,
+including 19 spanning the official training and test partitions. The official partition
+is preserved for comparability; disjoint image IDs do not guarantee unique image content.
+
 ## Evaluation
 
-Reported on the official 8,041-image test split, read exactly once. See
+Reported on the official 8,041-image test split, held out from model selection. See
 [`RESULTS.md`](RESULTS.md) for the numbers and the confidence intervals.
 
 Metrics: top-1 and top-5 accuracy, macro-F1, balanced accuracy, per-class recall,
@@ -67,9 +71,8 @@ unresolved rather than as a ranking.
 
 ## Limitations
 
-**Fine-grained confusions are the dominant failure mode.** Most errors are between
-closely related classes — the same model in a different year, or two models from the same
-make. See the error-structure breakdown in `RESULTS.md`. In many of these cases the
+**Error structure must be measured.** The generated error breakdown in `RESULTS.md`
+will distinguish confusions between closely related classes from cross-make mistakes. In many of these cases the
 distinction is a badge or a bumper detail that is not resolvable at 224×224, and
 sometimes not resolvable from the photograph at all.
 
@@ -91,7 +94,7 @@ that data has. None of that was audited here.
 
 A single temperature is fit on validation by minimising NLL and applied to test. This
 cannot change accuracy — dividing logits by a positive scalar leaves the argmax
-unchanged — but it substantially reduces expected calibration error. The demo reports
+unchanged — but its effect on expected calibration error must be measured on the held-out test set. The demo reports
 calibrated probabilities for that reason: an uncalibrated 196-class softmax reads "99%"
 on cars the model cannot reliably identify, and a confidence number that cannot be
 trusted is worse than showing none.

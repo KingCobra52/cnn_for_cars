@@ -52,15 +52,23 @@ def collect_runs(root: Path | None = None) -> list[RunSummary]:
     Returns:
         One summary per evaluated run.
     """
+    from carvision.utils.artifacts import active_names
+
+    expected = active_names() if root is None else None
     summaries: list[RunSummary] = []
 
     for evaluation_path in sorted((root or runs_dir()).glob("*/evaluation.json")):
         run_dir = evaluation_path.parent
-        evaluation = json.loads(evaluation_path.read_text())
-        config = json.loads((run_dir / "config.json").read_text())
-        metrics = json.loads((run_dir / "metrics.json").read_text())
-
-        if bool(evaluation.get("baseline")):
+        if expected is not None and run_dir.name not in expected:
+            continue
+        try:
+            evaluation = json.loads(evaluation_path.read_text())
+            if bool(evaluation.get("baseline")):
+                continue
+            config = json.loads((run_dir / "config.json").read_text())
+            metrics = json.loads((run_dir / "metrics.json").read_text())
+        except (OSError, ValueError) as exc:
+            logger.warning("Skipping incomplete run %s: %s", run_dir.name, exc)
             continue
         summaries.append(
             RunSummary(
@@ -116,8 +124,9 @@ def headline_table(summaries: list[RunSummary]) -> str:
         # The representative seed is the median *by validation*, with the seed spread
         # beside it, so the row shows both sources of uncertainty and picks its
         # representative without consulting test.
-        ordered = sorted(runs, key=lambda r: r.val_top1)
-        representative = ordered[len(ordered) // 2]
+        from carvision.utils.artifacts import representative as select_representative
+
+        representative = select_representative(runs, key=lambda r: (r.val_top1, r.seed))
         spread = seed_spread([r.top1 for r in runs])
 
         lines.append(
@@ -190,7 +199,7 @@ def render(summaries: list[RunSummary]) -> str:
     # Selected on validation, matching carvision.eval.find_best_run. Picking the run
     # with the highest *test* score and then reporting that score is selection on the
     # test set, and it biases the headline number upward.
-    best = max(summaries, key=lambda s: s.val_top1)
+    best = min(summaries, key=lambda s: (-s.val_top1, s.name))
     errors = best.evaluation["errors"]
 
     return f"""# Results
@@ -255,21 +264,30 @@ def write(output_path: Path | None = None, *, strict: bool = False) -> Path:
     Returns:
         The path written.
     """
+    from carvision.publication import gather
+    from carvision.utils.artifacts import publish
+
     summaries = collect_runs()
-    if strict:
-        manifest_path = runs_dir().parent / "sweep_manifest.json"
-        if not manifest_path.exists():
-            raise ValueError("Strict report requires artifacts/sweep_manifest.json.")
-        expected = set(json.loads(manifest_path.read_text())["expected_runs"])
-        actual = {summary.name for summary in summaries}
-        missing = sorted(expected - actual)
-        if missing:
-            raise ValueError("Strict report is missing evaluations: " + ", ".join(missing))
+    supporting, errors = gather(strict)
+    if errors:
+        supporting = (
+            "> INCOMPLETE / UNVERIFIED — do not treat these as published results.\n\n" + supporting
+        )
+    document = render(summaries) + "\n" + supporting + "\n"
     path = output_path or (repo_root() / "docs" / "RESULTS.md")
-    # Create the directory rather than assuming it, the way figures._save does. It is
-    # absent whenever carvision runs outside a checkout, or when --out names a new
-    # location, and the failure is otherwise a bare FileNotFoundError.
+    files = {path: document.encode()}
+    if output_path is None:
+        readme = repo_root() / "README.md"
+        start, end = "<!-- carvision:results:start -->", "<!-- carvision:results:end -->"
+        original = (
+            readme.read_text() if readme.exists() else "# carvision\n\n" + start + "\n" + end + "\n"
+        )
+        if original.count(start) != 1 or original.count(end) != 1:
+            raise ValueError("README needs exactly one generated results marker pair.")
+        before, remaining = original.split(start)
+        _, after = remaining.split(end)
+        files[readme] = (before + start + "\n" + document + "\n" + end + after).encode()
     ensure_dir(path.parent)
-    path.write_text(render(summaries))
+    publish(files, repo_root() / ".report-publication.json")
     logger.info("Wrote %s", path)
     return path

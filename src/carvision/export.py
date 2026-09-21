@@ -362,7 +362,9 @@ def prepare_serving_bundle(
             f"{run_dir.name} has not been evaluated. Run `carvision eval` first -- the "
             f"bundle needs its calibration temperature and headline metrics."
         )
-    evaluation = json_module.loads(evaluation_path.read_text())
+    from carvision.utils.artifacts import dependencies, fingerprint, validate_evaluation
+
+    evaluation = validate_evaluation(run_dir)
 
     head, payload = load_run(run_dir)
     backbone_name = str(payload["backbone"])
@@ -387,6 +389,9 @@ def prepare_serving_bundle(
     (output_dir / "serving.json").write_text(
         json_module.dumps(
             {
+                "provenance": dependencies(
+                    [run_dir / "evaluation.json", run_dir / "checkpoint.pt"], "carvision export"
+                ),
                 "run": run_dir.name,
                 "backbone": backbone_name,
                 "head": payload["head_kind"],
@@ -402,6 +407,7 @@ def prepare_serving_bundle(
                     "num_samples": evaluation["metrics"]["num_samples"],
                 },
                 "onnx": {
+                    "sha256": fingerprint(output_dir / "model.onnx"),
                     "opset": OPSET,
                     "size_mb": round(result.size_mb, 2),
                     "max_abs_diff_vs_pytorch": result.max_abs_diff,

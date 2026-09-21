@@ -292,6 +292,18 @@ def test_bundle_records_the_temperature_actually_folded_in(
         )
     )
 
+    from carvision.utils.artifacts import dependencies, fingerprint
+
+    np.savez(run_dir / "test_predictions.npz", logits=np.zeros((1, 2)))
+    evaluation = json.loads((run_dir / "evaluation.json").read_text())
+    evaluation["provenance"] = dependencies(
+        [run_dir / "checkpoint.pt", run_dir / "test_predictions.npz"], "carvision eval"
+    )
+    evaluation["provenance"]["predictions_sha256"] = fingerprint(run_dir / "test_predictions.npz")
+    from carvision.utils.artifacts import seal_evaluation
+
+    seal_evaluation(evaluation)
+    (run_dir / "evaluation.json").write_text(json.dumps(evaluation))
     bundle = prepare_serving_bundle(run_dir, tmp_path / "serving", temperature=3.5)
     config = json.loads((bundle / "serving.json").read_text())
 

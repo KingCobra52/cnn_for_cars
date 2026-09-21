@@ -438,7 +438,9 @@ def verify_local_dataset(
         class_names[int(i)] for i in frame["label_id"]
     ]:
         raise DatasetAcquisitionError("Manifest labels do not match the ordered class mapping")
-    digest_rows = frame.to_dict("records")
+    digest_rows: list[dict[str, Any]] = [
+        {str(key): value for key, value in row.items()} for row in frame.to_dict("records")
+    ]
     if provenance.get("manifest_sha256") != _manifest_checksum(digest_rows):
         raise DatasetAcquisitionError("Manifest checksum mismatch")
     for row in digest_rows:

@@ -112,10 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---- eval
     eval_parser = sub.add_parser("eval", help="Score a run on the test set.")
-    eval_parser.add_argument(
+    eval_choice = eval_parser.add_mutually_exclusive_group()
+    eval_choice.add_argument(
         "--run", default="best", help="Run directory name, or 'best' for the top val run."
     )
-    eval_parser.add_argument("--all", action="store_true")
+    eval_choice.add_argument("--all", action="store_true")
     eval_parser.add_argument("--resamples", type=int, default=1000)
 
     compare = sub.add_parser("compare", help="Paired bootstrap between two evaluated runs.")
@@ -253,6 +254,8 @@ def _cmd_zeroshot(args: argparse.Namespace) -> int:
     from carvision.features import cache as cache_module
     from carvision.models.zeroshot import PROMPT_TEMPLATES, build_text_classifier, predict
 
+    if args.backbone != "clip_vitb32":
+        raise ValueError("Zero-shot requires clip_vitb32 with matching OpenAI weights.")
     embeddings, labels, image_ids = cache_module.load(args.backbone, args.split)
     classifier = build_text_classifier(load_class_names())
     scores = predict(embeddings, classifier)
@@ -265,7 +268,9 @@ def _cmd_zeroshot(args: argparse.Namespace) -> int:
     )
     from carvision.utils.paths import runs_dir
 
-    baseline_dir = runs_dir() / "zeroshot-baseline"
+    baseline_dir = runs_dir() / (
+        "zeroshot-baseline" if args.split == "test" else f"zeroshot-{args.split}"
+    )
     baseline_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         baseline_dir / "test_predictions.npz",
@@ -279,21 +284,39 @@ def _cmd_zeroshot(args: argparse.Namespace) -> int:
     (baseline_dir / "metrics.json").write_text(
         json.dumps({"best_val_top1": 0.0, "baseline": True}) + "\n"
     )
+    from carvision.metrics import bootstrap, classification
+    from carvision.models.backbones import get_backbone
+    from carvision.utils.artifacts import dependencies, evaluation_inputs, fingerprint
+
+    provenance = dependencies(
+        evaluation_inputs(baseline_dir, args.backbone, [args.split]), "carvision zeroshot"
+    )
+    provenance["predictions_sha256"] = fingerprint(baseline_dir / "test_predictions.npz")
     (baseline_dir / "evaluation.json").write_text(
         json.dumps(
             {
                 "run": baseline_dir.name,
                 "baseline": True,
-                "metrics": {"top1": top1, "top5": top5, "num_samples": len(labels)},
-                "provenance": {
-                    "backbone": args.backbone,
-                    "prompt_templates": list(PROMPT_TEMPLATES),
-                },
+                "metrics": classification.compute(scores, labels).as_dict(),
+                "top1_interval": bootstrap.accuracy_interval(
+                    scores.argmax(axis=1) == labels
+                ).as_dict(),
+                "class_names": load_class_names(),
+                "split": args.split,
+                "weights": get_backbone(args.backbone).weights_tag,
+                "prompt_templates": list(PROMPT_TEMPLATES),
+                "provenance": provenance,
             },
             indent=2,
         )
         + "\n"
     )
+    from carvision.utils.artifacts import read, seal_evaluation
+
+    evaluation_path = baseline_dir / "evaluation.json"
+    evaluation = read(evaluation_path)
+    seal_evaluation(evaluation, args.backbone)
+    evaluation_path.write_text(json.dumps(evaluation, indent=2) + "\n")
     print(
         json.dumps(
             {"split": args.split, "top1": top1, "top5": top5, "path": str(baseline_dir)}, indent=2
@@ -366,17 +389,61 @@ def _cmd_bench(args: argparse.Namespace) -> int:
     run_dir = _resolve_run(args.run)
     head, payload = load_run(run_dir)
     spec = get_backbone(str(payload["backbone"]))
-    model = ServingModel(spec.build(), head).eval()
+    import platform
+
+    import onnxruntime
+
+    from carvision.utils.artifacts import (
+        dependencies,
+        fingerprint,
+        read,
+        validate,
+        validate_evaluation,
+    )
+
+    evaluation = validate_evaluation(run_dir)
+    bundle = read(Path(args.bundle) / "serving.json")
+    validate(bundle.get("provenance", {}))
+    if (
+        bundle["run"] != run_dir.name
+        or bundle["temperature"] != evaluation["calibration"]["temperature"]
+    ):
+        raise ValueError(
+            "Bundle does not match selected run and calibration; rerun carvision export."
+        )
+    if bundle["onnx"]["sha256"] != fingerprint(Path(args.bundle) / "model.onnx"):
+        raise ValueError("ONNX graph changed; rerun carvision export.")
+    model = ServingModel(spec.build(), head, temperature=bundle["temperature"]).eval()
     onnx_path = Path(args.bundle) / "model.onnx"
 
     rows = []
     for batch_size in args.batch_sizes:
         example = torch.randn(batch_size, 3, spec.preprocess.crop, spec.preprocess.crop)
-        rows.append(benchmark_pytorch(model, example, runs=args.runs).as_dict())
+        rows.append(benchmark_pytorch(model, example, runs=args.runs, warmup=10).as_dict())
         if onnx_path.exists():
-            rows.append(benchmark_onnx(onnx_path, example, runs=args.runs).as_dict())
+            rows.append(benchmark_onnx(onnx_path, example, runs=args.runs, warmup=10).as_dict())
 
-    (run_dir / "latency.json").write_text(json.dumps(rows, indent=2) + "\n")
+    (run_dir / "latency.json").write_text(
+        json.dumps(
+            {
+                "rows": rows,
+                "warmup": 10,
+                "runs": args.runs,
+                "hardware": {
+                    "platform": platform.platform(),
+                    "processor": platform.processor(),
+                    "threads": torch.get_num_threads(),
+                },
+                "versions": {"torch": torch.__version__, "onnxruntime": onnxruntime.__version__},
+                "provenance": dependencies(
+                    [run_dir / "evaluation.json", Path(args.bundle) / "serving.json", onnx_path],
+                    "carvision bench",
+                ),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     for row in rows:
         print(
             f"{row['runtime']:12s} batch={row['batch_size']:<3d} "

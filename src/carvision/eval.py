@@ -73,9 +73,9 @@ class EvaluationResult:
 
 def _fingerprint(path: Path) -> str:
     """Return a stable fingerprint for an artifact file."""
-    import hashlib
+    from carvision.utils.artifacts import fingerprint
 
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return fingerprint(path)
 
 
 def load_run(run_dir: Path) -> tuple[torch.nn.Module, dict[str, Any]]:
@@ -167,12 +167,15 @@ def evaluate_run(
     )
     evaluation_path = run_dir / "evaluation.json"
     saved = json.loads(evaluation_path.read_text())
-    saved["provenance"] = {
-        "checkpoint_sha256": _fingerprint(run_dir / "checkpoint.pt"),
-        "predictions_sha256": _fingerprint(run_dir / "test_predictions.npz"),
-        "backbone": backbone,
-        "test_image_ids": len(test_ids),
-    }
+    from carvision.utils.artifacts import dependencies, evaluation_inputs, seal_evaluation
+
+    saved["class_names"] = class_names
+    saved["settings"] = {"resamples": resamples, "seed": seed}
+    saved["provenance"] = dependencies(
+        evaluation_inputs(run_dir, backbone, ["train", "val", "test"]), "carvision eval"
+    )
+    saved["provenance"]["predictions_sha256"] = _fingerprint(run_dir / "test_predictions.npz")
+    seal_evaluation(saved, backbone)
     evaluation_path.write_text(json.dumps(saved, indent=2) + "\n")
 
     logger.info(
@@ -231,7 +234,7 @@ def compare_runs(first: Path, second: Path, *, seed: int = 0) -> bootstrap.Inter
         ValueError: If the two runs were evaluated on different images.
     """
 
-    def correctness(run_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+    def correctness(run_dir: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         path = run_dir / "test_predictions.npz"
         if not path.exists():
             raise FileNotFoundError(f"{path} not found; run `carvision eval` on it first.")
@@ -239,15 +242,28 @@ def compare_runs(first: Path, second: Path, *, seed: int = 0) -> bootstrap.Inter
         ids = data["image_ids"]
         if len(np.unique(ids)) != len(ids):
             raise ValueError(f"{run_dir.name} contains duplicate image IDs.")
-        return data["logits"].argmax(axis=1) == data["labels"], ids
+        return data["logits"].argmax(axis=1) == data["labels"], ids, data["labels"]
 
-    correct_a, ids_a = correctness(first)
-    correct_b, ids_b = correctness(second)
-    if not np.array_equal(ids_a, ids_b):
+    from carvision.utils.artifacts import validate_evaluation
+
+    if validate_evaluation(first).get("class_names") != validate_evaluation(second).get(
+        "class_names"
+    ):
+        raise ValueError("Evaluated runs have different ordered class mappings.")
+    correct_a, ids_a, labels_a = correctness(first)
+    correct_b, ids_b, labels_b = correctness(second)
+    if set(ids_a.tolist()) != set(ids_b.tolist()):
         raise ValueError(
             f"{first.name} and {second.name} were evaluated on different images, so a "
             f"paired comparison is not valid."
         )
+    if not np.array_equal(np.sort(ids_a), np.sort(ids_b)):
+        raise ValueError("Prediction IDs could not be deterministically aligned.")
+    if not np.array_equal(labels_a[np.argsort(ids_a)], labels_b[np.argsort(ids_b)]):
+        raise ValueError("Evaluated runs have conflicting labels for the same image IDs.")
+    order_a = np.argsort(ids_a)
+    order_b = np.argsort(ids_b)
+    correct_a, correct_b = correct_a[order_a], correct_b[order_b]
 
     interval = bootstrap.paired_difference_interval(correct_a, correct_b, seed=seed)
     verdict = "resolved" if interval.excludes_zero else "NOT resolved at this sample size"
@@ -259,27 +275,12 @@ def compare_all(*, baseline: Path | None = None) -> list[dict[str, Any]]:
     """Save all pairwise comparisons for representative evaluated runs."""
     from itertools import combinations
 
-    grouped: dict[tuple[str, str], list[Path]] = {}
-    for evaluation in sorted(runs_dir().glob("*/evaluation.json")):
-        if evaluation.parent.name == "zeroshot-baseline":
-            continue
-        config = json.loads((evaluation.parent / "config.json").read_text())
-        grouped.setdefault((str(config["backbone"]), str(config["head"])), []).append(evaluation)
-    evaluated = []
-    for paths in grouped.values():
-        ordered = sorted(
-            paths,
-            key=lambda path: (
-                float(json.loads((path.parent / "metrics.json").read_text())["best_val_top1"]),
-                -int(json.loads((path.parent / "config.json").read_text())["seed"]),
-            ),
-        )
-        evaluated.append(ordered[len(ordered) // 2])
+    from carvision.utils.artifacts import dependencies, representatives
+
+    evaluated = [run / "evaluation.json" for run in representatives()]
     if baseline is None:
-        candidate = runs_dir() / "zeroshot-baseline"
-        baseline = candidate if (candidate / "test_predictions.npz").exists() else None
-    if baseline is not None:
-        evaluated.append(baseline / "evaluation.json" if baseline.is_dir() else baseline)
+        baseline = runs_dir() / "zeroshot-baseline"
+    evaluated.append(baseline if baseline.suffix == ".json" else baseline / "evaluation.json")
     rows: list[dict[str, Any]] = []
     for first, second in combinations(evaluated, 2):
         interval = compare_runs(first.parent, second.parent)
@@ -292,7 +293,18 @@ def compare_all(*, baseline: Path | None = None) -> list[dict[str, Any]]:
             }
         )
     output = runs_dir().parent / "comparisons.json"
-    output.write_text(json.dumps(rows, indent=2) + "\n")
+    output.write_text(
+        json.dumps(
+            {
+                "rows": rows,
+                "provenance": dependencies(
+                    [*evaluated, runs_dir().parent / "sweep_manifest.json"], "carvision compare-all"
+                ),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     return rows
 
 
@@ -308,11 +320,21 @@ def find_best_run() -> Path:
     Raises:
         FileNotFoundError: If no runs have been trained.
     """
-    candidates = sorted(runs_dir().glob("*/metrics.json"))
+    manifest_path = runs_dir().parent / "sweep_manifest.json"
+    expected = (
+        set(json.loads(manifest_path.read_text())["expected_runs"])
+        if manifest_path.exists()
+        else None
+    )
+    candidates = sorted(
+        p for p in runs_dir().glob("*/metrics.json") if (p.parent / "checkpoint.pt").exists()
+    )
+    if expected is not None:
+        candidates = [path for path in candidates if path.parent.name in expected]
     if not candidates:
         raise FileNotFoundError(f"No runs under {runs_dir()}. Train one first.")
 
     def val_top1(path: Path) -> float:
         return float(json.loads(path.read_text())["best_val_top1"])
 
-    return max(candidates, key=val_top1).parent
+    return min(candidates, key=lambda path: (-val_top1(path), path.parent.name)).parent

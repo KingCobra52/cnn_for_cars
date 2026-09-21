@@ -119,43 +119,43 @@ cache:  ## Build the frozen-backbone embedding cache for one backbone.
 	$(VENV_BIN)/carvision cache build --backbone $(BACKBONE)
 
 .PHONY: cache-all
-cache-all: data  ## Build the embedding cache for every backbone (slow, once).
-	for b in resnet50 clip_vitb32 dinov2_vits14; do $(VENV_BIN)/carvision cache build --backbone $$b; done
+cache-all:  ## Build the embedding cache for every backbone (slow, once).
+	@set -e; for b in resnet50 clip_vitb32 dinov2_vits14; do $(VENV_BIN)/carvision cache build --backbone $$b || exit $$?; done
 
 .PHONY: train
 train:  ## Train one head on cached embeddings.
 	$(VENV_BIN)/carvision train --backbone $(BACKBONE) --head $(HEAD) --seed $(SEED)
 
 .PHONY: sweep
-sweep: cache-all  ## 3 backbones x 2 heads x 5 seeds on cached embeddings.
+sweep:  ## 3 backbones x 2 heads x 5 seeds on cached embeddings.
 	$(VENV_BIN)/carvision sweep
 
 .PHONY: zeroshot
-zeroshot: cache-all  ## CLIP zero-shot baseline (no training).
+zeroshot:  ## CLIP zero-shot baseline (no training).
 	$(VENV_BIN)/carvision zeroshot
 
 .PHONY: eval
-eval: sweep  ## Evaluate every trained run.
+eval:  ## Evaluate every trained run.
 	$(VENV_BIN)/carvision eval --all
 
 .PHONY: compare
-compare: eval zeroshot  ## Generate all paired comparisons.
+compare:  ## Generate all paired comparisons.
 	$(VENV_BIN)/carvision compare-all
 
 .PHONY: figures
-figures: eval  ## Regenerate every figure in docs/figures/.
+figures:  ## Regenerate every figure in docs/figures/.
 	$(VENV_BIN)/carvision figures
 
 .PHONY: report
-report: compare bench figures  ## Regenerate docs/RESULTS.md from the evaluated runs.
+report:  ## Regenerate docs/RESULTS.md from the evaluated runs.
 	$(VENV_BIN)/carvision report --strict
 
 .PHONY: export
-export: eval  ## Export to ONNX and verify parity with PyTorch.
+export:  ## Export to ONNX and verify parity with PyTorch.
 	$(VENV_BIN)/carvision export --run best
 
 .PHONY: bench
-bench: export  ## Benchmark CPU latency, PyTorch vs ONNX Runtime.
+bench:  ## Benchmark CPU latency, PyTorch vs ONNX Runtime.
 	$(VENV_BIN)/carvision bench
 
 .PHONY: demo
@@ -164,7 +164,18 @@ demo:  ## Run the Gradio demo locally.
 	$(VENV_PY) app/app.py
 
 .PHONY: all
-all: data cache-all sweep zeroshot eval compare export bench figures report  ## Full pipeline from scratch.
+all:  ## Full pipeline from scratch (ordered even under 'make -j all').
+	@set -e; \
+	$(MAKE) data; \
+	$(MAKE) cache-all; \
+	$(MAKE) sweep; \
+	$(MAKE) zeroshot; \
+	$(MAKE) eval; \
+	$(MAKE) compare; \
+	$(MAKE) export; \
+	$(MAKE) bench; \
+	$(MAKE) figures; \
+	$(MAKE) report
 
 # ----------------------------------------------------------------- misc
 

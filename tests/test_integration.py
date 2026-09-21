@@ -435,3 +435,182 @@ def test_onnx_export_is_verified_against_pytorch(serving_bundle: Path) -> None:
     config = json.loads((serving_bundle / "serving.json").read_text())
     assert config["onnx"]["max_abs_diff_vs_pytorch"] < 1e-3
     assert config["onnx"]["size_mb"] > 0
+
+
+def test_partial_split_recovery_and_generation_failure(synthetic_repo, monkeypatch):
+    import pandas as pd
+
+    from carvision.data.splits import SplitError, build_splits
+
+    directory = synthetic_repo / "data/splits"
+    (directory / "val.csv").unlink()
+    with pytest.raises(SplitError, match="Partial"):
+        build_splits(val_fraction=0.2, seed=99)
+    build_splits(val_fraction=0.2, seed=99, overwrite=True)
+    originals = {path: path.read_bytes() for path in directory.iterdir() if path.is_file()}
+
+    def fail(*args, **kwargs):
+        raise OSError("injected CSV failure")
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", fail)
+    with pytest.raises(OSError, match="injected"):
+        build_splits(val_fraction=0.2, seed=98, overwrite=True)
+    assert all(path.read_bytes() == content for path, content in originals.items())
+
+
+def test_complete_publication_pipeline(synthetic_repo, monkeypatch):
+    import argparse
+    from dataclasses import replace
+
+    from carvision import cli
+    from carvision.eval import compare_all, compare_runs, evaluate_all, find_best_run
+    from carvision.export import prepare_serving_bundle
+    from carvision.figures import generate_all
+    from carvision.models import zeroshot
+    from carvision.report import write
+    from carvision.train import TrainConfig, sweep
+    from carvision.utils.artifacts import read, representatives
+
+    names = ["resnet50", "clip_vitb32", "dinov2_vits14"]
+    for name in names:
+        monkeypatch.setitem(REGISTRY, name, replace(FAKE_SPEC, name=name))
+    # Real feature caches, heads, evaluations and exports; only pretrained inference is replaced.
+    monkeypatch.setattr(
+        zeroshot,
+        "build_text_classifier",
+        lambda classes: np.eye(len(classes), EMBEDDING_DIM, dtype=np.float32),
+    )
+    from carvision.features import cache
+
+    build_cache = cache.build
+
+    def offline_build(*args, **kwargs):
+        kwargs["num_workers"] = 0
+        return build_cache(*args, **kwargs)
+
+    monkeypatch.setattr(cache, "build", offline_build)
+    previous_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        sweep(names, ["linear", "mlp"], list(range(5)), base=TrainConfig(max_epochs=2))
+        evaluate_all(resamples=20)
+        cli._cmd_zeroshot(argparse.Namespace(backbone="clip_vitb32", split="test"))
+        rows = compare_all()
+        assert len(rows) == 21
+        best = find_best_run()
+        bundle = prepare_serving_bundle(best, synthetic_repo / "artifacts/serving")
+        cli._cmd_bench(
+            argparse.Namespace(run=best.name, bundle=str(bundle), batch_sizes=[1], runs=2)
+        )
+        generate_all(best)
+        readme = synthetic_repo / "README.md"
+        readme.write_text(
+            "Keep this prose.\n<!-- carvision:results:start -->\nold\n"
+            "<!-- carvision:results:end -->\nKeep this ending.\n"
+        )
+        result = write(strict=True)
+        first = result.read_bytes(), readme.read_bytes()
+        assert "CLIP zero-shot" in result.read_text()
+        assert "## CPU latency" in readme.read_text()
+        assert "Keep this prose." in readme.read_text()
+        assert "Keep this ending." in readme.read_text()
+        assert result.read_text() in readme.read_text()
+        write(strict=True)
+        assert first == (result.read_bytes(), readme.read_bytes())
+        # Non-test output must not overwrite the published baseline.
+        baseline = synthetic_repo / "artifacts/runs/zeroshot-baseline/evaluation.json"
+        original_baseline = baseline.read_bytes()
+        cli._cmd_zeroshot(argparse.Namespace(backbone="clip_vitb32", split="val"))
+        assert baseline.read_bytes() == original_baseline
+        # Every category required for publication must be present and current.
+        for missing in [
+            baseline,
+            best / "evaluation.json",
+            best / "checkpoint.pt",
+            best / "latency.json",
+            synthetic_repo / "artifacts/comparisons.json",
+            synthetic_repo / "artifacts/sweep_timing.json",
+            bundle / "model.onnx",
+            synthetic_repo / "docs/figures/calibration.png",
+            synthetic_repo / "artifacts/sweep_manifest.json",
+            synthetic_repo / "docs/figures/provenance.json",
+            next((synthetic_repo / "artifacts/embeddings").rglob("manifest.json")),
+            synthetic_repo / "data/splits/test.csv",
+            synthetic_repo / "data/stanford_cars/classes.txt",
+        ]:
+            original = missing.read_bytes()
+            missing.unlink()
+            try:
+                with pytest.raises((ValueError, FileNotFoundError)):
+                    write(strict=True)
+                assert first == (result.read_bytes(), readme.read_bytes())
+            finally:
+                missing.write_bytes(original)
+        # Mutation, not only deletion, invalidates publication and comparison.
+        checkpoint = best / "checkpoint.pt"
+        original = checkpoint.read_bytes()
+        checkpoint.write_bytes(original + b"changed")
+        try:
+            with pytest.raises(ValueError, match="Stale"):
+                compare_runs(best, representatives()[0])
+            with pytest.raises(ValueError):
+                write(strict=True)
+        finally:
+            checkpoint.write_bytes(original)
+        latency = read(best / "latency.json")
+        assert latency["runs"] == 2 and latency["warmup"] == 10
+        assert {row["runtime"] for row in latency["rows"]} == {"pytorch", "onnxruntime"}
+    finally:
+        torch.set_num_threads(previous_threads)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_cache_resume_records_active_time_without_downtime(
+    synthetic_repo, fake_backbone, monkeypatch, legacy
+):
+    from types import SimpleNamespace
+
+    from carvision.features import cache
+    from carvision.utils.artifacts import read
+
+    ticks = []
+
+    def clock():
+        value = 100 + 10 * len(ticks)
+        ticks.append(value)
+        return value
+
+    monkeypatch.setattr(cache, "time", SimpleNamespace(monotonic=clock))
+    monkeypatch.setattr(cache, "CHUNK_ROWS", 8)
+    original_embed = cache.embed_batch
+    calls = 0
+
+    def interrupted(module, images):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("interrupted")
+        return original_embed(module, images)
+
+    monkeypatch.setattr(cache, "embed_batch", interrupted)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        cache.build(fake_backbone, "train", batch_size=8, num_workers=0)
+    progress_path = next((synthetic_repo / "artifacts/embeddings").rglob("progress.json"))
+    prior = read(progress_path)["active_seconds"]
+    assert prior == 10
+    if legacy:
+        progress = read(progress_path)
+        progress.pop("active_seconds")
+        progress.pop("timing_complete")
+        progress_path.write_text(json.dumps(progress))
+        prior = 0
+    ticks.clear()
+    monkeypatch.setattr(cache, "embed_batch", original_embed)
+    entry = cache.build(fake_backbone, "train", batch_size=8, num_workers=0)
+    metadata = read(entry.directory / "manifest.json")
+    assert metadata["seconds"] == prior + ticks[-1] - ticks[0]
+    assert metadata["timing_complete"] is (not legacy)
+    assert metadata["artifact_bytes"] > 0
+    before = list(ticks)
+    cache.build(fake_backbone, "train", batch_size=8, num_workers=0)
+    assert ticks == before

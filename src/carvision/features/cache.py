@@ -226,8 +226,13 @@ def build(
     progress_path = directory / "progress.json"
 
     start_row = 0
+    prior_seconds = 0.0
+    timing_complete = True
     if not force and embeddings_path.exists() and progress_path.exists():
-        start_row = int(json.loads(progress_path.read_text())["rows_done"])
+        progress = json.loads(progress_path.read_text())
+        start_row = int(progress["rows_done"])
+        prior_seconds = float(progress.get("active_seconds", 0.0))
+        timing_complete = bool(progress.get("timing_complete", "active_seconds" in progress))
         logger.info("Resuming %s/%s from row %d of %d", backbone, split, start_row, num_rows)
 
     memmap = np.lib.format.open_memmap(
@@ -279,7 +284,15 @@ def build(
 
         if row - last_flush >= CHUNK_ROWS:
             memmap.flush()
-            progress_path.write_text(json.dumps({"rows_done": row}))
+            progress_path.write_text(
+                json.dumps(
+                    {
+                        "rows_done": row,
+                        "active_seconds": prior_seconds + time.monotonic() - started,
+                        "timing_complete": timing_complete,
+                    }
+                )
+            )
             last_flush = row
 
     memmap.flush()
@@ -288,7 +301,7 @@ def build(
     np.save(directory / "labels.npy", dataset.labels)
     (directory / "image_ids.txt").write_text("\n".join(dataset.image_ids) + "\n")
 
-    elapsed = time.monotonic() - started
+    elapsed = prior_seconds + time.monotonic() - started
     _write_manifest(
         directory,
         {
@@ -302,7 +315,12 @@ def build(
             "dataset_fingerprint": dataset_fingerprint(),
             "num_rows": num_rows,
             "dim": dim,
-            "seconds": round(elapsed, 1),
+            "seconds": round(elapsed, 3),
+            "timing_complete": timing_complete,
+            "artifact_bytes": sum(
+                (directory / name).stat().st_size
+                for name in ("embeddings.npy", "labels.npy", "image_ids.txt")
+            ),
             "torch_version": torch.__version__,
             "git_sha": git_sha(),
         },
