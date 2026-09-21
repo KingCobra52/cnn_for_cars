@@ -46,6 +46,11 @@ def cache_dir() -> Path:
     return repo_root() / "artifacts" / "embeddings"
 
 
+def artifacts_dir() -> Path:
+    """Directory containing generated experiment artifacts."""
+    return repo_root() / "artifacts"
+
+
 def runs_dir() -> Path:
     """Directory holding one subdirectory per training run (gitignored)."""
     return repo_root() / "artifacts" / "runs"

@@ -49,6 +49,7 @@ fsspec==2026.6.0
 ftfy==6.3.1
 gitdb==4.0.12
 GitPython==3.1.62
+gradio==5.50.0
 google-auth==2.58.0
 graphene==3.4.3
 graphql-core==3.2.12
@@ -103,10 +104,10 @@ opentelemetry-sdk==1.44.0
 opentelemetry-semantic-conventions==0.65b0
 open_clip_torch==3.3.0
 packaging==26.3
-pandas-stubs==3.0.5.260914
-pandas==3.0.6
+pandas-stubs==2.3.2.250926
+pandas==2.3.3
 pathspec==1.1.1
-pillow==12.3.0
+pillow==11.3.0
 platformdirs==4.11.10
 pluggy==1.6.0
 prettytable==3.18.0
@@ -117,8 +118,8 @@ pyarrow==25.0.1
 pyasn1==0.6.4
 pyasn1_modules==0.4.2
 pycparser==3.0
-pydantic==2.13.5
-pydantic_core==2.46.5
+pydantic==2.12.3
+pydantic_core==2.41.4
 Pygments==2.21.0
 pyparsing==3.3.2
 pytest-cov==7.1.0
@@ -141,7 +142,7 @@ skops==0.15.0
 smmap==5.0.3
 SQLAlchemy==2.0.54
 sqlparse==0.6.0
-starlette==1.6.0
+starlette==0.48.0
 sympy==1.14.0
 threadpoolctl==3.7.0
 timm==1.0.29

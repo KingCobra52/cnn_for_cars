@@ -71,6 +71,13 @@ class EvaluationResult:
         }
 
 
+def _fingerprint(path: Path) -> str:
+    """Return a stable fingerprint for an artifact file."""
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def load_run(run_dir: Path) -> tuple[torch.nn.Module, dict[str, Any]]:
     """Load a trained head from a run directory.
 
@@ -158,6 +165,15 @@ def evaluate_run(
         image_ids=np.array(test_ids),
         confusion=matrix,
     )
+    evaluation_path = run_dir / "evaluation.json"
+    saved = json.loads(evaluation_path.read_text())
+    saved["provenance"] = {
+        "checkpoint_sha256": _fingerprint(run_dir / "checkpoint.pt"),
+        "predictions_sha256": _fingerprint(run_dir / "test_predictions.npz"),
+        "backbone": backbone,
+        "test_image_ids": len(test_ids),
+    }
+    evaluation_path.write_text(json.dumps(saved, indent=2) + "\n")
 
     logger.info(
         "%s: top-1 %s, top-5 %.2f%%, make-level %.2f%%, ECE %.4f -> %.4f (T=%.3f)",
@@ -170,6 +186,27 @@ def evaluate_run(
         temperature,
     )
     return result
+
+
+def evaluate_all(
+    *, resamples: int = bootstrap.DEFAULT_RESAMPLES, seed: int = 0
+) -> list[EvaluationResult]:
+    """Evaluate every expected completed sweep run in deterministic order."""
+    manifest_path = runs_dir().parent / "sweep_manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError("No sweep manifest found; run `carvision sweep` first.")
+    expected = json.loads(manifest_path.read_text())["expected_runs"]
+    results: list[EvaluationResult] = []
+    missing: list[str] = []
+    for name in expected:
+        path = runs_dir() / name
+        if not (path / "checkpoint.pt").exists():
+            missing.append(name)
+            continue
+        results.append(evaluate_run(path, resamples=resamples, seed=seed))
+    if missing:
+        raise FileNotFoundError("Missing completed runs: " + ", ".join(missing))
+    return results
 
 
 def compare_runs(first: Path, second: Path, *, seed: int = 0) -> bootstrap.Interval:
@@ -199,7 +236,10 @@ def compare_runs(first: Path, second: Path, *, seed: int = 0) -> bootstrap.Inter
         if not path.exists():
             raise FileNotFoundError(f"{path} not found; run `carvision eval` on it first.")
         data = np.load(path, allow_pickle=False)
-        return data["logits"].argmax(axis=1) == data["labels"], data["image_ids"]
+        ids = data["image_ids"]
+        if len(np.unique(ids)) != len(ids):
+            raise ValueError(f"{run_dir.name} contains duplicate image IDs.")
+        return data["logits"].argmax(axis=1) == data["labels"], ids
 
     correct_a, ids_a = correctness(first)
     correct_b, ids_b = correctness(second)
@@ -213,6 +253,47 @@ def compare_runs(first: Path, second: Path, *, seed: int = 0) -> bootstrap.Inter
     verdict = "resolved" if interval.excludes_zero else "NOT resolved at this sample size"
     logger.info("%s - %s = %s (%s)", first.name, second.name, interval, verdict)
     return interval
+
+
+def compare_all(*, baseline: Path | None = None) -> list[dict[str, Any]]:
+    """Save all pairwise comparisons for representative evaluated runs."""
+    from itertools import combinations
+
+    grouped: dict[tuple[str, str], list[Path]] = {}
+    for evaluation in sorted(runs_dir().glob("*/evaluation.json")):
+        if evaluation.parent.name == "zeroshot-baseline":
+            continue
+        config = json.loads((evaluation.parent / "config.json").read_text())
+        grouped.setdefault((str(config["backbone"]), str(config["head"])), []).append(evaluation)
+    evaluated = []
+    for paths in grouped.values():
+        ordered = sorted(
+            paths,
+            key=lambda path: (
+                float(json.loads((path.parent / "metrics.json").read_text())["best_val_top1"]),
+                -int(json.loads((path.parent / "config.json").read_text())["seed"]),
+            ),
+        )
+        evaluated.append(ordered[len(ordered) // 2])
+    if baseline is None:
+        candidate = runs_dir() / "zeroshot-baseline"
+        baseline = candidate if (candidate / "test_predictions.npz").exists() else None
+    if baseline is not None:
+        evaluated.append(baseline / "evaluation.json" if baseline.is_dir() else baseline)
+    rows: list[dict[str, Any]] = []
+    for first, second in combinations(evaluated, 2):
+        interval = compare_runs(first.parent, second.parent)
+        rows.append(
+            {
+                "first": first.parent.name,
+                "second": second.parent.name,
+                **interval.as_dict(),
+                "label": "unadjusted exploratory",
+            }
+        )
+    output = runs_dir().parent / "comparisons.json"
+    output.write_text(json.dumps(rows, indent=2) + "\n")
+    return rows
 
 
 def find_best_run() -> Path:

@@ -357,6 +357,21 @@ def sweep(
         One result per combination, in iteration order.
     """
     template = base or TrainConfig()
+    from carvision.utils.paths import artifacts_dir
+
+    manifest = {
+        "backbones": list(backbones),
+        "heads": list(heads),
+        "seeds": list(seeds),
+        "expected_runs": [
+            f"{backbone}-{head}-seed{seed}"
+            for backbone in backbones
+            for head in heads
+            for seed in seeds
+        ],
+    }
+    artifacts_dir().mkdir(parents=True, exist_ok=True)
+    (artifacts_dir() / "sweep_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     results: list[TrainResult] = []
 
     for backbone in backbones:
