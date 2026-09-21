@@ -12,6 +12,8 @@ anything.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -121,15 +123,25 @@ def build_splits(
         raise SplitError(f"{manifest_path} not found. Run `carvision data download` first.")
 
     out_dir = ensure_dir(splits_dir())
-    existing = [p for p in (out_dir / f"{s}.csv" for s in SPLIT_NAMES) if p.exists()]
-    if existing and not overwrite:
-        raise SplitError(
-            f"Splits already exist ({', '.join(p.name for p in existing)}). "
-            f"They are committed on purpose so results stay comparable. "
-            f"Pass --overwrite only if you intend to invalidate published numbers."
-        )
+    existing = [out_dir / f"{s}.csv" for s in SPLIT_NAMES]
+    provenance_path = out_dir / "provenance.json"
+    if any(p.exists() for p in existing) or provenance_path.exists():
+        if not all(p.exists() for p in existing) or not provenance_path.exists():
+            raise SplitError(
+                "Partial split set or provenance found; restore all four files or use --overwrite"
+            )
+        if not overwrite:
+            validate_splits(val_fraction=val_fraction, seed=seed)
+            logger.info("Existing splits validated; no-op")
+            frames = {name: pd.read_csv(out_dir / f"{name}.csv") for name in SPLIT_NAMES}
+            return SplitSizes(**{name: len(frame) for name, frame in frames.items()})
 
     manifest = pd.read_csv(manifest_path)
+    required_manifest = {"image_id", "split", "label_id", "label_name", "relpath"}
+    if not required_manifest.issubset(manifest.columns):
+        raise SplitError(
+            f"Manifest missing columns {sorted(required_manifest - set(manifest.columns))}"
+        )
     columns = ["image_id", "label_id", "label_name", "relpath"]
 
     official_train = manifest[manifest["split"] == "train"].sort_values("image_id")
@@ -148,12 +160,91 @@ def build_splits(
     # Validate before writing. Checking afterwards leaves a leaking split on disk, and
     # the --overwrite guard then protects the bad file from being regenerated.
     assert_disjoint(frames)
+    if any(frame["image_id"].duplicated().any() for frame in frames.values()):
+        raise SplitError("Duplicate image IDs found in a split")
+    if set(frames["train"]["image_id"]) | set(frames["val"]["image_id"]) != set(
+        official_train["image_id"]
+    ):
+        raise SplitError("Train and validation do not provide complete official-train coverage")
+    class_count = manifest["label_id"].nunique()
+    if any(frame["label_id"].nunique() != class_count for frame in frames.values()):
+        raise SplitError(f"Every split must contain all {class_count} classes")
+    if (
+        not frames["test"]
+        .merge(
+            manifest[manifest["split"] == "test"],
+            on=["image_id", "label_id", "label_name", "relpath"],
+            how="outer",
+            indicator=True,
+        )["_merge"]
+        .eq("both")
+        .all()
+    ):
+        raise SplitError("Generated test split does not exactly match official test manifest")
 
     for name, frame in frames.items():
-        frame.to_csv(out_dir / f"{name}.csv", index=False)
+        frame.to_csv(out_dir / f"{name}.csv", index=False, columns=columns)
         logger.info("%-5s %5d images, %3d classes", name, len(frame), frame["label_id"].nunique())
 
-    return SplitSizes(**{name: len(frame) for name, frame in frames.items()})
+    download_path = data_dir() / "stanford_cars" / "download.json"
+    download = json.loads(download_path.read_text()) if download_path.exists() else {}
+    payload = {
+        "dataset_fingerprint": download.get("manifest_sha256", "unknown"),
+        "source_revision": download.get("revision", "unknown"),
+        "class_names": sorted(
+            manifest["label_name"].dropna().unique().tolist(),
+            key=lambda x: int(manifest.loc[manifest["label_name"] == x, "label_id"].iloc[0]),
+        ),
+        "split_parameters": {"val_fraction": val_fraction, "seed": seed},
+        "counts": {name: len(frame) for name, frame in frames.items()},
+        "csv_sha256": {
+            name: hashlib.sha256((out_dir / f"{name}.csv").read_bytes()).hexdigest()
+            for name in SPLIT_NAMES
+        },
+        "generation_libraries": {"numpy": np.__version__, "pandas": pd.__version__},
+    }
+    provenance_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return SplitSizes(**payload["counts"])
+
+
+def validate_splits(
+    *, val_fraction: float = DEFAULT_VAL_FRACTION, seed: int = DEFAULT_SPLIT_SEED
+) -> None:
+    """Validate committed split files against the local dataset and provenance."""
+    import pandas as pd
+
+    manifest = pd.read_csv(data_dir() / "stanford_cars" / "manifest.csv")
+    path = splits_dir() / "provenance.json"
+    if not path.exists():
+        raise SplitError("data/splits/provenance.json is missing")
+    provenance = json.loads(path.read_text())
+    download_path = data_dir() / "stanford_cars" / "download.json"
+    if download_path.exists():
+        download = json.loads(download_path.read_text())
+        if (
+            provenance["dataset_fingerprint"] != download["manifest_sha256"]
+            or provenance["source_revision"] != download["revision"]
+        ):
+            raise SplitError("Split provenance does not match the downloaded dataset")
+    if provenance["split_parameters"] != {"val_fraction": val_fraction, "seed": seed}:
+        raise SplitError(
+            "Split parameters differ from the requested configuration; use --overwrite"
+        )
+    frames = {name: pd.read_csv(splits_dir() / f"{name}.csv") for name in SPLIT_NAMES}
+    assert_disjoint(frames)
+    required = ["image_id", "label_id", "label_name", "relpath"]
+    for name, frame in frames.items():
+        if list(frame.columns) != required or frame["image_id"].duplicated().any():
+            raise SplitError(f"{name}.csv is edited or has duplicate IDs")
+        checksum = hashlib.sha256((splits_dir() / f"{name}.csv").read_bytes()).hexdigest()
+        if checksum != provenance["csv_sha256"].get(name):
+            raise SplitError(f"{name}.csv checksum does not match provenance")
+    expected = manifest[["image_id", "label_id", "label_name", "relpath"]]
+    actual = pd.concat(frames.values(), ignore_index=True)
+    if len(actual) != len(expected) or set(map(tuple, actual.to_numpy())) != set(
+        map(tuple, expected.to_numpy())
+    ):
+        raise SplitError("Committed splits do not provide complete manifest coverage")
 
 
 def assert_disjoint(frames: dict[str, pd.DataFrame]) -> None:

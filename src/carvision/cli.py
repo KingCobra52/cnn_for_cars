@@ -67,6 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Overrides val_fraction from the data config.",
     )
+    verify = data_sub.add_parser("verify", help="Validate the local dataset and committed splits.")
+    verify.add_argument("--data-config", default="stanford_cars")
     split.add_argument(
         "--seed", type=int, default=None, help="Overrides split_seed from the data config."
     )
@@ -113,11 +115,13 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument(
         "--run", default="best", help="Run directory name, or 'best' for the top val run."
     )
+    eval_parser.add_argument("--all", action="store_true")
     eval_parser.add_argument("--resamples", type=int, default=1000)
 
     compare = sub.add_parser("compare", help="Paired bootstrap between two evaluated runs.")
     compare.add_argument("first")
     compare.add_argument("second")
+    sub.add_parser("compare-all", help="Generate all pairwise evaluated-run comparisons.")
 
     # ---- export / bench
     export_parser = sub.add_parser("export", help="Export a run to ONNX and verify parity.")
@@ -133,12 +137,14 @@ def build_parser() -> argparse.ArgumentParser:
     figures = sub.add_parser("figures", help="Regenerate every figure under docs/figures/.")
     figures.add_argument("--run", default="best")
 
-    sub.add_parser("report", help="Regenerate docs/RESULTS.md from the evaluated runs.")
+    report = sub.add_parser("report", help="Regenerate docs/RESULTS.md from the evaluated runs.")
+    report.add_argument("--strict", action="store_true")
 
     return parser
 
 
 def _cmd_data(args: argparse.Namespace) -> int:
+    from carvision.config import load_data_config
     from carvision.data import download as download_module
     from carvision.data import splits as splits_module
 
@@ -153,8 +159,6 @@ def _cmd_data(args: argparse.Namespace) -> int:
             )
             if value is not None
         }
-        from carvision.config import load_data_config
-
         settings = load_data_config(args.data_config)
         root = download_module.download(
             args.repo_id,
@@ -164,6 +168,16 @@ def _cmd_data(args: argparse.Namespace) -> int:
             **overrides,
         )
         logger.info("Dataset ready at %s", root)
+        return 0
+
+    if args.data_command == "verify":
+        from carvision.data.download import verify_local_dataset
+        from carvision.data.splits import validate_splits
+
+        verify_local_dataset()
+        settings = load_data_config(args.data_config)
+        validate_splits(val_fraction=settings.val_fraction, seed=settings.split_seed)
+        logger.info("Dataset and committed splits verified")
         return 0
 
     from carvision.config import load_data_config
@@ -237,9 +251,9 @@ def _cmd_zeroshot(args: argparse.Namespace) -> int:
 
     from carvision.data.download import load_class_names
     from carvision.features import cache as cache_module
-    from carvision.models.zeroshot import build_text_classifier, predict
+    from carvision.models.zeroshot import PROMPT_TEMPLATES, build_text_classifier, predict
 
-    embeddings, labels, _ = cache_module.load(args.backbone, args.split)
+    embeddings, labels, image_ids = cache_module.load(args.backbone, args.split)
     classifier = build_text_classifier(load_class_names())
     scores = predict(embeddings, classifier)
 
@@ -249,7 +263,42 @@ def _cmd_zeroshot(args: argparse.Namespace) -> int:
             [label in row for label, row in zip(labels, np.argsort(-scores)[:, :5], strict=True)]
         )
     )
-    print(json.dumps({"split": args.split, "top1": top1, "top5": top5}, indent=2))
+    from carvision.utils.paths import runs_dir
+
+    baseline_dir = runs_dir() / "zeroshot-baseline"
+    baseline_dir.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        baseline_dir / "test_predictions.npz",
+        logits=scores,
+        labels=labels,
+        image_ids=np.asarray(image_ids),
+    )
+    (baseline_dir / "config.json").write_text(
+        json.dumps({"backbone": args.backbone, "head": "zero-shot", "seed": 0}) + "\n"
+    )
+    (baseline_dir / "metrics.json").write_text(
+        json.dumps({"best_val_top1": 0.0, "baseline": True}) + "\n"
+    )
+    (baseline_dir / "evaluation.json").write_text(
+        json.dumps(
+            {
+                "run": baseline_dir.name,
+                "baseline": True,
+                "metrics": {"top1": top1, "top5": top5, "num_samples": len(labels)},
+                "provenance": {
+                    "backbone": args.backbone,
+                    "prompt_templates": list(PROMPT_TEMPLATES),
+                },
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    print(
+        json.dumps(
+            {"split": args.split, "top1": top1, "top5": top5, "path": str(baseline_dir)}, indent=2
+        )
+    )
     return 0
 
 
@@ -267,8 +316,11 @@ def _resolve_run(name: str) -> Path:
 
 
 def _cmd_eval(args: argparse.Namespace) -> int:
-    from carvision.eval import evaluate_run
+    from carvision.eval import evaluate_all, evaluate_run
 
+    if args.all:
+        print(json.dumps([r.as_dict() for r in evaluate_all(resamples=args.resamples)], indent=2))
+        return 0
     result = evaluate_run(_resolve_run(args.run), resamples=args.resamples)
     print(json.dumps(result.as_dict(), indent=2))
     return 0
@@ -281,6 +333,14 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     print(
         json.dumps({**interval.as_dict(), "difference_resolved": interval.excludes_zero}, indent=2)
     )
+    return 0
+
+
+def _cmd_compare_all(args: argparse.Namespace) -> int:
+    del args
+    from carvision.eval import compare_all
+
+    print(json.dumps(compare_all(), indent=2))
     return 0
 
 
@@ -335,10 +395,9 @@ def _cmd_figures(args: argparse.Namespace) -> int:
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
-    del args
     from carvision.report import write
 
-    print(write())
+    print(write(strict=args.strict))
     return 0
 
 
@@ -364,6 +423,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "zeroshot": _cmd_zeroshot,
         "eval": _cmd_eval,
         "compare": _cmd_compare,
+        "compare-all": _cmd_compare_all,
         "export": _cmd_export,
         "bench": _cmd_bench,
         "figures": _cmd_figures,

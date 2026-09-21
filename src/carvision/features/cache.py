@@ -95,7 +95,19 @@ def dataset_fingerprint() -> str:
     if not path.exists():
         return "unknown"
     try:
-        return str(json.loads(path.read_text()).get("manifest_sha256", "unknown"))
+        provenance = json.loads(path.read_text())
+        if not any(key in provenance for key in ("revision", "image_content_sha256")):
+            return str(provenance.get("manifest_sha256", "unknown"))
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "revision": provenance.get("revision"),
+                    "manifest": provenance.get("manifest_sha256"),
+                    "images": provenance.get("image_content_sha256"),
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
     except (json.JSONDecodeError, OSError):
         return "unknown"
 

@@ -7,7 +7,7 @@ num_classes: 196
 # mirror. Mirrors drift, so carvision.data.download.verify_mirror checks the real schema
 # at download time rather than trusting this file.
 hf_repo_id: tanganke/stanford_cars
-hf_revision: null
+hf_revision: 9abf6cf7d6dfa7b95152a0d6e791ea9435b47a40
 image_column: image
 label_column: label
 train_split: train

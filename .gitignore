@@ -4,6 +4,10 @@
 # `data/` followed by a negation would not work.
 data/*
 !data/splits/
+data/splits/*.csv
+data/splits/provenance.json
+!data/splits/*.csv
+!data/splits/provenance.json
 artifacts/
 mlruns/
 outputs/

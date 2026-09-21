@@ -12,5 +12,9 @@ stratified 15% carved out of the official train split; `train.csv` is the remain
 image appears in more than one file, and `carvision.data.splits.assert_disjoint` enforces
 that at generation time.
 
+`provenance.json` pins the dataset commit and manifest fingerprint, records realised
+counts, the ordered class mapping, split parameters, CSV checksums, and library versions.
+`carvision data verify` checks these records and decodes every local image.
+
 Regenerating them changes which images are evaluated, which invalidates every published
 number — hence the `--overwrite` guard on `carvision data split`.

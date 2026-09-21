@@ -1,14 +1,20 @@
 # carvision — one command per pipeline stage.
-# Everything except `setup` assumes the venv is active.
-
 PY      ?= python
 VENV    ?= .venv
+VENV_PY := $(VENV)/bin/python
+VENV_PIP := $(VENV)/bin/pip
+VENV_BIN := $(VENV)/bin
+
+ifeq ($(shell uname -s),Darwin)
+TORCH_INDEX ?= https://pypi.org/simple
+else
+TORCH_INDEX ?= https://download.pytorch.org/whl/cpu
+endif
 
 # Torch wheel index. The default is the CPU build: this project is designed around
 # having no GPU, and the PyPI default would pull a ~2.5 GB CUDA build that does
 # nothing here. Override for a GPU box, e.g.
 #   make setup TORCH_INDEX=https://download.pytorch.org/whl/cu124
-TORCH_INDEX ?= https://download.pytorch.org/whl/cpu
 BACKBONE ?= dinov2_vits14
 HEAD     ?= linear
 SEED     ?= 0
@@ -25,14 +31,15 @@ help:  ## Show this help.
 .PHONY: setup
 setup:  ## Create a venv and install everything (CPU torch by default).
 	$(PY) -m venv $(VENV)
-	$(VENV)/bin/pip install --upgrade pip
+	$(VENV_PIP) install --upgrade pip
 	# Install torch from $(TORCH_INDEX) first. pip then sees the requirement already
 	# satisfied and will not reinstall it from PyPI when the package goes in below.
-	$(VENV)/bin/pip install torch torchvision --index-url $(TORCH_INDEX)
-	$(VENV)/bin/pip install -e ".[dev,export,app]"
-	$(VENV)/bin/pre-commit install
+	$(VENV_PIP) install torch torchvision --index-url $(TORCH_INDEX)
+	$(VENV_PIP) install --requirement requirements.lock
+	$(VENV_PIP) install -e . --no-deps
+	$(VENV_BIN)/pre-commit install
 	@echo
-	@echo "Installed: $$($(VENV)/bin/python -c 'import torch; print(\"torch\", torch.__version__)')"
+	@echo "Installed: $$($(VENV_PY) -c 'import torch; print("torch", torch.__version__)')"
 	@echo "Next: make sync   (install the pinned set from requirements.lock)"
 	@echo "  or: make data   (download Stanford Cars and write the splits)"
 
@@ -42,11 +49,12 @@ sync:  ## Install the exact pinned versions from requirements.lock.
 	# wheel index that matches this machine first. Doing it in one pass with
 	# --extra-index-url lets pip choose either index for torch, which is how a CPU
 	# box ends up with a CUDA build.
-	$(VENV)/bin/pip install --index-url $(TORCH_INDEX) \
+	@test -x $(VENV_PY) || (echo "$(VENV) is missing; run 'make setup' first." >&2; exit 1)
+	$(VENV_PIP) install --index-url $(TORCH_INDEX) \
 	  $$(grep -E '^(torch|torchvision)==' requirements.lock | tr '\n' ' ')
 	# Everything else from PyPI. torch is already satisfied, so it is left alone.
-	$(VENV)/bin/pip install --requirement requirements.lock
-	$(VENV)/bin/pip install -e . --no-deps
+	$(VENV_PIP) install --requirement requirements.lock
+	$(VENV_PIP) install -e . --no-deps
 
 .PHONY: lock
 lock:  ## Regenerate requirements.lock from the current environment.
@@ -64,7 +72,7 @@ lock:  ## Regenerate requirements.lock from the current environment.
 	  '# environment costs ~2.5 GB for nothing. Installing torch from a CUDA index' \
 	  '# brings them back in as transitive dependencies, which is correct there.' \
 	  > requirements.lock
-	$(VENV)/bin/pip freeze --exclude-editable \
+	$(VENV_PIP) freeze --exclude-editable \
 	  | sed -E 's/^(torch|torchvision|torchaudio)==([^+]+)\+.*/\1==\2/' \
 	  | grep -viE '^(nvidia[-_]|triton==|cuda[-_](toolkit|bindings|pathfinder)==)' \
 	  | sort -f \
@@ -75,21 +83,25 @@ lock:  ## Regenerate requirements.lock from the current environment.
 
 .PHONY: lint
 lint:  ## Run ruff (lint + format check).
-	ruff check src tests app
-	ruff format --check src tests app
+	@test -x $(VENV_BIN)/ruff || (echo "$(VENV) is missing; run 'make setup' first." >&2; exit 1)
+	$(VENV_BIN)/ruff check src tests app
+	$(VENV_BIN)/ruff format --check src tests app
 
 .PHONY: format
 format:  ## Autoformat and autofix.
-	ruff check --fix src tests app
-	ruff format src tests app
+	@test -x $(VENV_BIN)/ruff || (echo "$(VENV) is missing; run 'make setup' first." >&2; exit 1)
+	$(VENV_BIN)/ruff check --fix src tests app
+	$(VENV_BIN)/ruff format src tests app
 
 .PHONY: typecheck
 typecheck:  ## Run mypy in strict mode over src/.
-	mypy
+	@test -x $(VENV_BIN)/mypy || (echo "$(VENV) is missing; run 'make setup' first." >&2; exit 1)
+	$(VENV_BIN)/mypy
 
 .PHONY: test
 test:  ## Run the test suite (no network, no dataset).
-	pytest -m "not slow"
+	@test -x $(VENV_BIN)/pytest || (echo "$(VENV) is missing; run 'make setup' first." >&2; exit 1)
+	$(VENV_BIN)/pytest -m "not slow"
 
 .PHONY: check
 check: lint typecheck test  ## Everything CI runs.
@@ -98,55 +110,61 @@ check: lint typecheck test  ## Everything CI runs.
 
 .PHONY: data
 data:  ## Download Stanford Cars and write the deterministic splits.
-	carvision data download
-	carvision data split
+	$(VENV_BIN)/carvision data download
+	$(VENV_BIN)/carvision data split
+	$(VENV_BIN)/carvision data verify
 
 .PHONY: cache
 cache:  ## Build the frozen-backbone embedding cache for one backbone.
-	carvision cache build --backbone $(BACKBONE)
+	$(VENV_BIN)/carvision cache build --backbone $(BACKBONE)
 
 .PHONY: cache-all
-cache-all:  ## Build the embedding cache for every backbone (slow, once).
-	for b in resnet50 clip_vitb32 dinov2_vits14; do carvision cache build --backbone $$b; done
+cache-all: data  ## Build the embedding cache for every backbone (slow, once).
+	for b in resnet50 clip_vitb32 dinov2_vits14; do $(VENV_BIN)/carvision cache build --backbone $$b; done
 
 .PHONY: train
 train:  ## Train one head on cached embeddings.
-	carvision train backbone=$(BACKBONE) head=$(HEAD) seed=$(SEED)
+	$(VENV_BIN)/carvision train --backbone $(BACKBONE) --head $(HEAD) --seed $(SEED)
 
 .PHONY: sweep
-sweep:  ## 3 backbones x 2 heads x 5 seeds on cached embeddings.
-	carvision sweep
+sweep: cache-all  ## 3 backbones x 2 heads x 5 seeds on cached embeddings.
+	$(VENV_BIN)/carvision sweep
 
 .PHONY: zeroshot
-zeroshot:  ## CLIP zero-shot baseline (no training).
-	carvision zeroshot
+zeroshot: cache-all  ## CLIP zero-shot baseline (no training).
+	$(VENV_BIN)/carvision zeroshot
 
 .PHONY: eval
-eval:  ## Evaluate the best run: metrics, CIs, calibration.
-	carvision eval --run best
+eval: sweep  ## Evaluate every trained run.
+	$(VENV_BIN)/carvision eval --all
+
+.PHONY: compare
+compare: eval zeroshot  ## Generate all paired comparisons.
+	$(VENV_BIN)/carvision compare-all
 
 .PHONY: figures
-figures:  ## Regenerate every figure in docs/figures/.
-	carvision figures
+figures: eval  ## Regenerate every figure in docs/figures/.
+	$(VENV_BIN)/carvision figures
 
 .PHONY: report
-report:  ## Regenerate docs/RESULTS.md from the evaluated runs.
-	carvision report
+report: compare bench figures  ## Regenerate docs/RESULTS.md from the evaluated runs.
+	$(VENV_BIN)/carvision report --strict
 
 .PHONY: export
-export:  ## Export to ONNX and verify parity with PyTorch.
-	carvision export --run best
+export: eval  ## Export to ONNX and verify parity with PyTorch.
+	$(VENV_BIN)/carvision export --run best
 
 .PHONY: bench
-bench:  ## Benchmark CPU latency, PyTorch vs ONNX Runtime.
-	carvision bench
+bench: export  ## Benchmark CPU latency, PyTorch vs ONNX Runtime.
+	$(VENV_BIN)/carvision bench
 
 .PHONY: demo
 demo:  ## Run the Gradio demo locally.
-	cd app && $(PY) app.py
+	@test -x $(VENV_PY) || (echo "$(VENV) is missing; run 'make setup' first." >&2; exit 1)
+	$(VENV_PY) app/app.py
 
 .PHONY: all
-all: data cache-all sweep zeroshot eval figures report export bench  ## Full pipeline from scratch.
+all: data cache-all sweep zeroshot eval compare export bench figures report  ## Full pipeline from scratch.
 
 # ----------------------------------------------------------------- misc
 
