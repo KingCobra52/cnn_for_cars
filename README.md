@@ -19,9 +19,9 @@ down to a bumper and a badge.
 
 ---
 
-## The constraint, and what it bought
+## Constraints
 
-This project had no GPU. Fine-tuning a backbone on 196 classes was therefore not
+This project has no GPU. Fine-tuning a backbone on 196 classes was therefore not
 available — a single epoch would have taken hours, and a meaningful experiment needs
 dozens.
 
