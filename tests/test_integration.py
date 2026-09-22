@@ -28,6 +28,7 @@ rather than against its own output.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -170,6 +171,7 @@ def synthetic_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 
     pd.DataFrame(rows).to_csv(root / "manifest.csv", index=False)
     (root / "classes.txt").write_text("\n".join(c.name for c in FAKE_CLASSES) + "\n")
+    (root / "download.json").write_text('{"fixture": true}\n')
 
     from carvision.data.splits import build_splits
 
@@ -320,6 +322,69 @@ def test_predictions_are_saved_for_error_analysis(evaluated_run: Path) -> None:
     assert data["confusion"].sum() == n
 
 
+def test_stale_evaluation_can_be_regenerated(trained_run: Path) -> None:
+    """The output being replaced must not prevent a valid training run from rerunning."""
+    from carvision.eval import evaluate_run
+
+    evaluate_run(trained_run, resamples=20)
+    path = trained_run / "evaluation.json"
+    stale = json.loads(path.read_text())
+    stale["provenance"]["version"] = 1
+    path.write_text(json.dumps(stale))
+    evaluate_run(trained_run, resamples=20)
+    assert json.loads(path.read_text())["provenance"]["version"] == 2
+
+
+def test_trained_run_can_be_evaluated_after_project_relocation(
+    trained_run: Path, synthetic_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Training provenance must resolve entirely inside the relocated project."""
+    relative_run = trained_run.relative_to(synthetic_repo)
+    relocated = synthetic_repo.with_name(f"{synthetic_repo.name}-relocated-training")
+    shutil.copytree(synthetic_repo, relocated)
+    shutil.rmtree(synthetic_repo)
+    monkeypatch.setenv("CARVISION_ROOT", str(relocated))
+
+    from carvision.eval import evaluate_run
+    from carvision.utils.artifacts import validate_evaluation, validate_training
+
+    moved_run = relocated / relative_run
+    validate_training(moved_run)
+    evaluate_run(moved_run, resamples=20, seed=0)
+    assert validate_evaluation(moved_run)["metrics"]["num_samples"] == (
+        len(FAKE_CLASSES) * TEST_PER_CLASS
+    )
+
+
+def test_evaluated_run_can_be_exported_and_served_after_project_relocation(
+    evaluated_run: Path, synthetic_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Evaluation, export, and real-image serving must not retain the old root."""
+    pytest.importorskip("onnx")
+    pytest.importorskip("onnxruntime")
+    relative_run = evaluated_run.relative_to(synthetic_repo)
+    relocated = synthetic_repo.with_name(f"{synthetic_repo.name}-relocated-serving")
+    shutil.copytree(synthetic_repo, relocated)
+    shutil.rmtree(synthetic_repo)
+    monkeypatch.setenv("CARVISION_ROOT", str(relocated))
+
+    from carvision.export import prepare_serving_bundle
+
+    moved_run = relocated / relative_run
+    bundle = prepare_serving_bundle(moved_run, relocated / "artifacts/serving")
+
+    sys.path.insert(0, str(APP_DIR))
+    import serving
+
+    image_path = next((relocated / "data/stanford_cars/images/test").glob("*.jpg"))
+    with Image.open(image_path) as image:
+        prediction = serving.Predictor(bundle)(image)
+
+    assert prediction
+    assert next(iter(prediction)) in {item.name for item in FAKE_CLASSES}
+    assert sum(prediction.values()) == pytest.approx(1.0, abs=0.02)
+
+
 def test_error_buckets_match_the_planted_structure(evaluated_run: Path) -> None:
     """Confusions between the two Ford Focus years must land in the year bucket.
 
@@ -384,8 +449,14 @@ def test_bundle_is_self_contained(serving_bundle: Path) -> None:
     """The Space installs neither torch nor carvision, so the bundle must carry it all."""
     for name in ("model.onnx", "classes.txt", "serving.json"):
         assert (serving_bundle / name).is_file(), f"{name} missing from the bundle"
+    assert not (serving_bundle / "model.onnx.data").exists()
 
     config = json.loads((serving_bundle / "serving.json").read_text())
+    import onnx
+
+    model = onnx.load(serving_bundle / "model.onnx", load_external_data=False)
+    default_opset = next(item.version for item in model.opset_import if item.domain == "")
+    assert config["onnx"]["opset"] == default_opset
     assert config["num_classes"] == len(FAKE_CLASSES)
     assert config["preprocess"]["crop"] == FAKE_PREPROCESS.crop
     assert config["metrics"]["num_samples"] == len(FAKE_CLASSES) * TEST_PER_CLASS

@@ -123,6 +123,11 @@ def evaluate_run(
     Returns:
         The evaluation result.
     """
+    from carvision.utils.artifacts import validate_training
+
+    # Validate every training input before loading features, fitting calibration, or
+    # touching any output. Existing evaluation artifacts therefore remain intact.
+    validate_training(run_dir)
     set_seed(seed)
     head, payload = load_run(run_dir)
     backbone = str(payload["backbone"])

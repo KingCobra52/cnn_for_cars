@@ -7,12 +7,14 @@ real input.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
 from torch import nn
 
-from carvision.export import ExportError, ServingModel, verify
+from carvision.export import ExportError, ServingModel, export, verify
 
 
 class TinyBackbone(nn.Module):
@@ -114,3 +116,59 @@ def test_exported_graph_accepts_a_different_batch_size(exported) -> None:
             None, {"images": np.random.randn(batch, 3, 32, 32).astype("float32")}
         )
         assert logits.shape == (batch, 7)
+
+
+def test_export_writes_one_self_contained_model_file(tmp_path, monkeypatch) -> None:
+    """Large production graphs must not hide untracked weights in a sidecar file."""
+    pytest.importorskip("onnx")
+    pytest.importorskip("onnxruntime")
+    from carvision.data.transforms import PreprocessSpec
+    from carvision.models.backbones import REGISTRY, BackboneSpec
+
+    spec = BackboneSpec(
+        name="tiny_single_file",
+        weights_tag="test",
+        embedding_dim=12,
+        preprocess=PreprocessSpec(resize=32, crop=32, mean=(0.5,) * 3, std=(0.5,) * 3),
+        factory=TinyBackbone,
+    )
+    monkeypatch.setitem(REGISTRY, spec.name, spec)
+    path = tmp_path / "model.onnx"
+    Path(f"{path}.data").write_bytes(b"stale sidecar")
+
+    export(spec.name, nn.Linear(12, 7), path, image_size=32, verify_batch=1)
+
+    assert path.is_file()
+    assert not Path(f"{path}.data").exists()
+
+
+def test_failed_export_preserves_existing_serving_bundle(tmp_path, monkeypatch) -> None:
+    """A failed replacement must leave both the old graph and its weights intact."""
+    from carvision.data.transforms import PreprocessSpec
+    from carvision.models.backbones import REGISTRY, BackboneSpec
+
+    spec = BackboneSpec(
+        name="tiny_failed_replacement",
+        weights_tag="test",
+        embedding_dim=12,
+        preprocess=PreprocessSpec(resize=32, crop=32, mean=(0.5,) * 3, std=(0.5,) * 3),
+        factory=TinyBackbone,
+    )
+    monkeypatch.setitem(REGISTRY, spec.name, spec)
+    path = tmp_path / "model.onnx"
+    sidecar = Path(f"{path}.data")
+    path.write_bytes(b"old graph")
+    sidecar.write_bytes(b"old weights")
+
+    def fail_export(*args, **kwargs) -> None:
+        Path(args[2]).write_bytes(b"partial replacement")
+        raise RuntimeError("injected exporter failure")
+
+    monkeypatch.setattr(torch.onnx, "export", fail_export)
+
+    with pytest.raises(RuntimeError, match="injected exporter failure"):
+        export(spec.name, nn.Linear(12, 7), path, image_size=32, verify_batch=1)
+
+    assert path.read_bytes() == b"old graph"
+    assert sidecar.read_bytes() == b"old weights"
+    assert set(tmp_path.iterdir()) == {path, sidecar}

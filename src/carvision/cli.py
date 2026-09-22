@@ -253,9 +253,20 @@ def _cmd_zeroshot(args: argparse.Namespace) -> int:
     from carvision.data.download import load_class_names
     from carvision.features import cache as cache_module
     from carvision.models.zeroshot import PROMPT_TEMPLATES, build_text_classifier, predict
+    from carvision.utils.paths import runs_dir
 
     if args.backbone != "clip_vitb32":
         raise ValueError("Zero-shot requires clip_vitb32 with matching OpenAI weights.")
+    from carvision.utils.artifacts import dependencies, evaluation_inputs
+
+    baseline_dir = runs_dir() / (
+        "zeroshot-baseline" if args.split == "test" else f"zeroshot-{args.split}"
+    )
+    # Check all required inputs before replacing a prior baseline.
+    dependencies(
+        evaluation_inputs(baseline_dir, args.backbone, [args.split], baseline=True),
+        "carvision zeroshot",
+    )
     embeddings, labels, image_ids = cache_module.load(args.backbone, args.split)
     classifier = build_text_classifier(load_class_names())
     scores = predict(embeddings, classifier)
@@ -265,11 +276,6 @@ def _cmd_zeroshot(args: argparse.Namespace) -> int:
         np.mean(
             [label in row for label, row in zip(labels, np.argsort(-scores)[:, :5], strict=True)]
         )
-    )
-    from carvision.utils.paths import runs_dir
-
-    baseline_dir = runs_dir() / (
-        "zeroshot-baseline" if args.split == "test" else f"zeroshot-{args.split}"
     )
     baseline_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -286,10 +292,11 @@ def _cmd_zeroshot(args: argparse.Namespace) -> int:
     )
     from carvision.metrics import bootstrap, classification
     from carvision.models.backbones import get_backbone
-    from carvision.utils.artifacts import dependencies, evaluation_inputs, fingerprint
+    from carvision.utils.artifacts import fingerprint
 
     provenance = dependencies(
-        evaluation_inputs(baseline_dir, args.backbone, [args.split]), "carvision zeroshot"
+        evaluation_inputs(baseline_dir, args.backbone, [args.split], baseline=True),
+        "carvision zeroshot",
     )
     provenance["predictions_sha256"] = fingerprint(baseline_dir / "test_predictions.npz")
     (baseline_dir / "evaluation.json").write_text(

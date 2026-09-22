@@ -177,6 +177,17 @@ def train(config: TrainConfig) -> TrainResult:
     set_seed(config.seed)
     started = time.monotonic()
 
+    if config.max_epochs < 1:
+        raise TrainingError(
+            f"No epoch improved on the initial validation accuracy, so there is no "
+            f"checkpoint to save (max_epochs={config.max_epochs}, epochs_run=0). "
+            f"Check that max_epochs >= 1 and that the validation split is non-empty."
+        )
+
+    from carvision.utils.artifacts import training_provenance
+
+    provenance = training_provenance(config, get_backbone(config.backbone))
+
     spec = get_backbone(config.backbone)
     train_x, train_y, _ = cache.load(config.backbone, "train")
     val_x, val_y, _ = cache.load(config.backbone, "val")
@@ -261,7 +272,9 @@ def train(config: TrainConfig) -> TrainResult:
     head.load_state_dict(best_state)
     elapsed = time.monotonic() - started
 
-    run_dir = _write_run(config, head, history, best_epoch, best_val_top1, elapsed, num_classes)
+    run_dir = _write_run(
+        config, head, history, best_epoch, best_val_top1, elapsed, num_classes, provenance
+    )
     logger.info(
         "%s/%s seed=%d: val top-1 %.2f%% in %.1fs -> %s",
         config.backbone,
@@ -290,12 +303,19 @@ def _write_run(
     best_val_top1: float,
     seconds: float,
     num_classes: int,
+    provenance: dict[str, Any],
 ) -> Path:
     """Persist the checkpoint, resolved config, and metrics for one run."""
     from carvision.utils.provenance import git_sha
 
     name = f"{config.backbone}-{config.head}-seed{config.seed}"
     run_dir = ensure_dir(runs_dir() / name)
+
+    from carvision.utils.artifacts import validate
+
+    # Inputs were captured before training; verify them again immediately before any
+    # completed run is published.
+    validate(provenance)
 
     # The directory name does not encode the hyperparameters, so retraining with a
     # different learning rate reuses it. Overwriting checkpoint.pt while leaving the
@@ -330,6 +350,15 @@ def _write_run(
             indent=2,
         )
         + "\n"
+    )
+    from carvision.utils.artifacts import fingerprint
+
+    provenance["outputs"] = {
+        name: fingerprint(run_dir / name)
+        for name in ("checkpoint.pt", "config.json", "metrics.json")
+    }
+    (run_dir / "training_provenance.json").write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n"
     )
     return run_dir
 

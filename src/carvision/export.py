@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import numpy as np
 import torch
@@ -30,8 +31,9 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-#: ONNX opset. 17 covers LayerNorm natively, which the heads use.
-OPSET = 17
+#: ONNX opset emitted by the supported PyTorch exporter. Requesting 17 on current
+#: PyTorch silently retained 18 after a failed downgrade, making serving metadata lie.
+OPSET = 18
 
 #: Tolerance for PyTorch/ONNX agreement. Float32 accumulation order differs between the
 #: two runtimes, so exact equality is not a reasonable bar; 1e-3 relative is.
@@ -127,24 +129,49 @@ def export(
     example = torch.randn(verify_batch, 3, size, size)
 
     ensure_dir(output_path.parent)
+    # PyTorch's dynamo exporter defaults to splitting parameters into a sibling
+    # ``.onnx.data`` file. The serving contract, metadata, and integrity checks all
+    # deliberately describe one portable model file, so keep the weights in it.
     logger.info("Exporting %s + %s -> %s", backbone_name, type(head).__name__, output_path)
 
-    torch.onnx.export(
-        model,
-        (example,),
-        str(output_path),
-        input_names=["images"],
-        output_names=["logits"],
-        # A dynamic batch axis lets the same graph serve one image or a hundred.
-        # The dynamo exporter warns that it prefers `dynamic_shapes`; `dynamic_axes`
-        # works correctly here and `tests/test_export.py` exercises the batch axis
-        # explicitly, so the warning is expected rather than a latent problem.
-        dynamic_axes={"images": {0: "batch"}, "logits": {0: "batch"}},
-        opset_version=OPSET,
-        do_constant_folding=True,
-    )
+    # Stage and verify beside the destination before touching a serving graph that may
+    # currently be live. Keeping both files in the same directory also makes the final
+    # replace atomic on the destination filesystem.
+    staged_path = output_path.with_name(f".{output_path.name}.{uuid4().hex}.tmp.onnx")
+    staged_sidecar = Path(f"{staged_path}.data")
+    try:
+        torch.onnx.export(
+            model,
+            (example,),
+            str(staged_path),
+            input_names=["images"],
+            output_names=["logits"],
+            # A dynamic batch axis lets the same graph serve one image or a hundred.
+            # The dynamo exporter warns that it prefers `dynamic_shapes`; `dynamic_axes`
+            # works correctly here and `tests/test_export.py` exercises the batch axis
+            # explicitly, so the warning is expected rather than a latent problem.
+            dynamic_axes={"images": {0: "batch"}, "logits": {0: "batch"}},
+            opset_version=OPSET,
+            do_constant_folding=True,
+            external_data=False,
+        )
 
-    result = verify(model, output_path, example)
+        staged_result = verify(model, staged_path, example)
+        staged_path.replace(output_path)
+        # Only after the new self-contained graph is installed can an old graph's
+        # external weights be safely removed.
+        Path(f"{output_path}.data").unlink(missing_ok=True)
+    finally:
+        staged_path.unlink(missing_ok=True)
+        staged_sidecar.unlink(missing_ok=True)
+
+    result = ExportResult(
+        path=output_path,
+        max_abs_diff=staged_result.max_abs_diff,
+        max_rel_diff=staged_result.max_rel_diff,
+        size_mb=staged_result.size_mb,
+        input_shape=staged_result.input_shape,
+    )
     logger.info(
         "Export verified: max abs diff %.2e, max rel diff %.2e, %.1f MB",
         result.max_abs_diff,

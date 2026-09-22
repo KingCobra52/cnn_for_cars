@@ -173,7 +173,29 @@ def test_a_run_with_no_improving_epoch_fails_clearly(
     class FakeSpec:
         embedding_dim = 4
 
+        @staticmethod
+        def cache_key() -> str:
+            return "fake@v1"
+
     monkeypatch.setattr("carvision.train.get_backbone", lambda _name: FakeSpec())
+    input_file = tmp_path / "training-input"
+    input_file.write_text("fixed")
+
+    def fake_provenance(config, _spec):
+        from carvision.utils.artifacts import dependencies
+
+        record = dependencies([input_file], "carvision train")
+        record.update(
+            {
+                "backbone": config.backbone,
+                "backbone_signature": "fake@v1",
+                "classes": [],
+                "config": config.__dict__,
+            }
+        )
+        return record
+
+    monkeypatch.setattr("carvision.utils.artifacts.training_provenance", fake_provenance)
 
     with pytest.raises(TrainingError, match="No epoch improved"):
         train(TrainConfig(backbone="fake", head="linear", max_epochs=0))
@@ -209,7 +231,29 @@ def test_retraining_clears_artifacts_derived_from_the_old_model(
     class FakeSpec:
         embedding_dim = 4
 
+        @staticmethod
+        def cache_key() -> str:
+            return "fake@v1"
+
     monkeypatch.setattr("carvision.train.get_backbone", lambda _name: FakeSpec())
+    input_file = tmp_path / "training-input"
+    input_file.write_text("fixed")
+
+    def fake_provenance(config, _spec):
+        from carvision.utils.artifacts import dependencies
+
+        record = dependencies([input_file], "carvision train")
+        record.update(
+            {
+                "backbone": config.backbone,
+                "backbone_signature": "fake@v1",
+                "classes": [],
+                "config": config.__dict__,
+            }
+        )
+        return record
+
+    monkeypatch.setattr("carvision.utils.artifacts.training_provenance", fake_provenance)
 
     config = TrainConfig(backbone="fake", head="linear", max_epochs=5, warmup_epochs=1)
     run_dir = train(config).run_dir
@@ -282,6 +326,24 @@ def test_bundle_records_the_temperature_actually_folded_in(
         },
         run_dir / "checkpoint.pt",
     )
+    (run_dir / "config.json").write_text('{"backbone": "tiny"}')
+    (run_dir / "metrics.json").write_text('{"best_val_top1": 0.5}')
+    from carvision.utils.artifacts import dependencies, fingerprint
+
+    training = dependencies([data_root / "classes.txt"], "carvision train")
+    training.update(
+        {
+            "backbone": "tiny",
+            "backbone_signature": spec.cache_key(),
+            "classes": ["a", "b"],
+            "config": {"backbone": "tiny"},
+            "outputs": {
+                name: fingerprint(run_dir / name)
+                for name in ("checkpoint.pt", "config.json", "metrics.json")
+            },
+        }
+    )
+    (run_dir / "training_provenance.json").write_text(json.dumps(training))
     (run_dir / "evaluation.json").write_text(
         json.dumps(
             {
@@ -291,8 +353,6 @@ def test_bundle_records_the_temperature_actually_folded_in(
             }
         )
     )
-
-    from carvision.utils.artifacts import dependencies, fingerprint
 
     np.savez(run_dir / "test_predictions.npz", logits=np.zeros((1, 2)))
     evaluation = json.loads((run_dir / "evaluation.json").read_text())

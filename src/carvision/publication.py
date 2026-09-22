@@ -32,7 +32,12 @@ def gather(strict: bool) -> tuple[str, list[str]]:
             return data
         except (ValueError, OSError, KeyError, RuntimeError) as exc:
             errors.append(f"{path.name}: {exc}")
-            return {}
+            if strict:
+                return {}
+            try:
+                return read(path)
+            except (ValueError, OSError, TypeError):
+                return {}
 
     expected = active_names()
     if not expected:
@@ -117,7 +122,10 @@ def gather(strict: bool) -> tuple[str, list[str]]:
                 f"Warmup: {latency['warmup']}; timed iterations: {latency['runs']}."
             )
         figure_record = read(figures_dir() / "provenance.json")
-        validate(figure_record)
+        try:
+            validate(figure_record)
+        except (ValueError, OSError, KeyError, RuntimeError) as exc:
+            errors.append(f"provenance.json: {exc}")
         required_figures = [
             "training_curves.png",
             "calibration.png",
@@ -127,7 +135,9 @@ def gather(strict: bool) -> tuple[str, list[str]]:
         for path in [best / "evaluation.json"] + [
             figures_dir() / name for name in required_figures
         ]:
-            if str(path.resolve()) not in figure_record["files"] or not path.exists():
+            from carvision.utils.artifacts import relative_path
+
+            if relative_path(path) not in figure_record["files"] or not path.exists():
                 errors.append(f"Missing figure source/output {path}; rerun carvision figures.")
     except (ValueError, OSError, KeyError, RuntimeError) as exc:
         errors.append(str(exc))

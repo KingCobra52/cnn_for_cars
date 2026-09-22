@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,6 +14,65 @@ import pytest
 from carvision.cli import build_parser
 from carvision.eval import compare_runs
 from carvision.utils.artifacts import dependencies, fingerprint, publish, recover
+
+
+def test_dependencies_reject_missing_required_and_omit_missing_optional(tmp_path, monkeypatch):
+    monkeypatch.setenv("CARVISION_ROOT", str(tmp_path))
+    required = tmp_path / "required"
+    optional = tmp_path / "optional"
+    with pytest.raises(FileNotFoundError, match="Missing required dependency"):
+        dependencies([required], "producer")
+    required.write_text("present")
+    record = dependencies([required, optional], "producer", optional_paths=[optional])
+    assert record["files"] == {"required": fingerprint(required)}
+
+
+def test_relative_provenance_survives_project_relocation(tmp_path, monkeypatch):
+    first = tmp_path / "first"
+    source = first / "data/input"
+    source.parent.mkdir(parents=True)
+    source.write_text("portable")
+    monkeypatch.setenv("CARVISION_ROOT", str(first))
+    record = dependencies([source], "producer")
+
+    second = tmp_path / "second"
+    shutil.copytree(first, second)
+    shutil.rmtree(first)
+    monkeypatch.setenv("CARVISION_ROOT", str(second))
+    from carvision.utils.artifacts import validate
+
+    validate(record)
+
+
+def test_training_validation_rejects_stale_backbone_identity(tmp_path, monkeypatch):
+    monkeypatch.setenv("CARVISION_ROOT", str(tmp_path))
+    data = tmp_path / "data/stanford_cars"
+    data.mkdir(parents=True)
+    classes = data / "classes.txt"
+    classes.write_text("car\n")
+    run = tmp_path / "artifacts/runs/run"
+    run.mkdir(parents=True)
+    (run / "checkpoint.pt").write_bytes(b"checkpoint")
+    (run / "config.json").write_text('{"backbone": "resnet50"}')
+    (run / "metrics.json").write_text("{}")
+    record = dependencies([classes], "carvision train")
+    record.update(
+        {
+            "backbone": "resnet50",
+            "backbone_signature": "OLD-WEIGHTS",
+            "classes": ["car"],
+            "config": {"backbone": "resnet50"},
+            "outputs": {
+                name: fingerprint(run / name)
+                for name in ("checkpoint.pt", "config.json", "metrics.json")
+            },
+        }
+    )
+    (run / "training_provenance.json").write_text(json.dumps(record))
+    from carvision.utils.artifacts import validate_training
+
+    with pytest.raises(ValueError, match="Backbone identity changed"):
+        validate_training(run)
 
 
 def make_evaluation(root, name, ids, labels, classes=None):
@@ -27,15 +87,22 @@ def make_evaluation(root, name, ids, labels, classes=None):
     (run / "checkpoint.pt").write_bytes(b"checkpoint")
     record = dependencies([run / "test_predictions.npz", run / "checkpoint.pt"], "carvision eval")
     record["predictions_sha256"] = fingerprint(run / "test_predictions.npz")
+    from carvision.models.zeroshot import PROMPT_TEMPLATES
     from carvision.utils.artifacts import seal_evaluation
 
-    data = {"class_names": classes or ["a", "b"], "provenance": record}
+    data = {
+        "baseline": True,
+        "class_names": classes or ["a", "b"],
+        "prompt_templates": list(PROMPT_TEMPLATES),
+        "provenance": record,
+    }
     seal_evaluation(data)
     (run / "evaluation.json").write_text(json.dumps(data))
     return run
 
 
-def test_comparison_aligns_and_rejects_conflicting_labels(tmp_path):
+def test_comparison_aligns_and_rejects_conflicting_labels(tmp_path, monkeypatch):
+    monkeypatch.setenv("CARVISION_ROOT", str(tmp_path))
     first = make_evaluation(tmp_path, "a", ["x", "y"], [0, 1])
     reordered = make_evaluation(tmp_path, "b", ["y", "x"], [1, 0])
     assert compare_runs(first, reordered).point == 0
@@ -45,7 +112,8 @@ def test_comparison_aligns_and_rejects_conflicting_labels(tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["duplicate", "classes", "checkpoint", "predictions"])
-def test_comparison_rejects_incompatible_artifacts(tmp_path, kind):
+def test_comparison_rejects_incompatible_artifacts(tmp_path, monkeypatch, kind):
+    monkeypatch.setenv("CARVISION_ROOT", str(tmp_path))
     a = make_evaluation(tmp_path, "a", ["x", "y"], [0, 1])
     b = make_evaluation(
         tmp_path,
@@ -210,9 +278,10 @@ def test_benchmark_clock_excludes_warmup(monkeypatch):
     assert result.p95_ms == pytest.approx(19.5)
 
 
-def test_modified_evaluation_settings_are_rejected(tmp_path):
+def test_modified_evaluation_settings_are_rejected(tmp_path, monkeypatch):
     from carvision.utils.artifacts import validate_evaluation
 
+    monkeypatch.setenv("CARVISION_ROOT", str(tmp_path))
     run = make_evaluation(tmp_path, "run", ["x", "y"], [0, 1])
     data = json.loads((run / "evaluation.json").read_text())
     data["settings"] = {"resamples": 1}

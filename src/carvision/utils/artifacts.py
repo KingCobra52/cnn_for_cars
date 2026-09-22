@@ -14,7 +14,32 @@ from carvision.utils.paths import repo_root, runs_dir
 
 T = TypeVar("T")
 
-VERSION = 1
+VERSION = 2
+
+
+def relative_path(path: Path) -> str:
+    """Return a portable, normalized path inside the active project root."""
+    root = repo_root().resolve()
+    resolved = path.resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"Provenance path {path} is outside project root {root}.") from exc
+    return relative.as_posix()
+
+
+def provenance_path(name: str) -> Path:
+    """Resolve a provenance path against the current project root."""
+    candidate = Path(name)
+    if candidate.is_absolute():
+        raise ValueError(f"Absolute provenance path {name} is not portable; regenerate it.")
+    root = repo_root().resolve()
+    resolved = (root / candidate).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"Provenance path {name} escapes project root; regenerate it.") from exc
+    return resolved
 
 
 def fingerprint(path: Path) -> str:
@@ -29,12 +54,22 @@ def read(path: Path) -> dict[str, Any]:
     return value
 
 
-def dependencies(paths: list[Path], command: str) -> dict[str, Any]:
-    """Capture required files, including explicitly absent optional inputs."""
+def dependencies(
+    paths: list[Path], command: str, *, optional_paths: list[Path] | None = None
+) -> dict[str, Any]:
+    """Capture required files, omitting explicitly optional files when absent."""
+    optional = {p.resolve() for p in (optional_paths or [])}
+    files: dict[str, str] = {}
+    for path in paths:
+        if not path.is_file() and path.resolve() in optional:
+            continue
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing required dependency {path}; rerun {command}.")
+        files[relative_path(path)] = fingerprint(path)
     return {
         "version": VERSION,
         "command": command,
-        "files": {str(p.resolve()): fingerprint(p) if p.is_file() else None for p in paths},
+        "files": files,
     }
 
 
@@ -44,13 +79,17 @@ def validate(record: dict[str, Any]) -> None:
     if record.get("version") != VERSION or not record.get("files"):
         raise ValueError(f"Unverified artifact; rerun {command}.")
     for name, expected in record["files"].items():
-        path = Path(name)
+        path = provenance_path(name)
+        if expected is None:
+            raise ValueError(f"Missing required dependency {name}; rerun {command}.")
         actual = fingerprint(path) if path.is_file() else None
         if actual != expected:
             raise ValueError(f"Stale artifact input {name}; rerun {command}.")
 
 
-def evaluation_inputs(run: Path, backbone: str, splits: list[str]) -> list[Path]:
+def evaluation_inputs(
+    run: Path, backbone: str, splits: list[str], *, baseline: bool = False
+) -> list[Path]:
     """Collect model, dataset, split and current cache identities."""
     from carvision.data.splits import load_split
     from carvision.features.cache import compute_cache_key, entry_dir
@@ -58,14 +97,19 @@ def evaluation_inputs(run: Path, backbone: str, splits: list[str]) -> list[Path]
 
     root = repo_root()
     paths = [
-        run / "config.json",
-        run / "metrics.json",
-        run / "checkpoint.pt",
-        run / "test_predictions.npz",
         root / "data/stanford_cars/download.json",
         root / "data/stanford_cars/classes.txt",
         root / "data/splits/provenance.json",
     ]
+    if not baseline:
+        paths.extend(
+            [
+                run / "config.json",
+                run / "metrics.json",
+                run / "checkpoint.pt",
+                run / "training_provenance.json",
+            ]
+        )
     for split in splits:
         paths.append(root / f"data/splits/{split}.csv")
         frame = load_split(split)
@@ -78,6 +122,72 @@ def evaluation_inputs(run: Path, backbone: str, splits: list[str]) -> list[Path]
             for name in ("manifest.json", "embeddings.npy", "labels.npy", "image_ids.txt")
         )
     return paths
+
+
+def training_provenance(config: Any, backbone_spec: Any | None = None) -> dict[str, Any]:
+    """Capture all inputs consumed by supervised training before it starts."""
+    from carvision.data.download import load_class_names
+    from carvision.data.splits import load_split
+    from carvision.features.cache import compute_cache_key, entry_dir
+    from carvision.models.backbones import get_backbone
+
+    root = repo_root()
+    backbone = backbone_spec or get_backbone(config.backbone)
+    paths = [
+        root / "data/stanford_cars/download.json",
+        root / "data/stanford_cars/classes.txt",
+        root / "data/splits/provenance.json",
+        root / "data/splits/train.csv",
+        root / "data/splits/val.csv",
+    ]
+    for split in ("train", "val"):
+        frame = load_split(split)
+        key = compute_cache_key(backbone, frame.image_id.tolist(), frame.label_id.to_numpy())
+        paths.extend(
+            entry_dir(config.backbone, split, key) / name
+            for name in ("manifest.json", "embeddings.npy", "labels.npy", "image_ids.txt")
+        )
+    record = dependencies(paths, "carvision train")
+    record.update(
+        {
+            "backbone": config.backbone,
+            "backbone_signature": backbone.cache_key(),
+            "classes": list(load_class_names()),
+            "config": json.loads(json.dumps(config.__dict__, sort_keys=True)),
+        }
+    )
+    return record
+
+
+def validate_training(run: Path) -> dict[str, Any]:
+    """Verify a completed training run and every identity it records."""
+    from carvision.data.download import load_class_names
+    from carvision.models.backbones import get_backbone
+
+    command = "carvision train"
+    try:
+        record = read(run / "training_provenance.json")
+        validate(record)
+        backbone = record["backbone"]
+        if get_backbone(backbone).cache_key() != record.get("backbone_signature"):
+            raise ValueError("Backbone identity changed")
+        if list(load_class_names()) != record.get("classes"):
+            raise ValueError("Class identity changed")
+        if read(run / "config.json") != record.get("config"):
+            raise ValueError("Training configuration changed")
+        outputs = record.get("outputs")
+        required = {"checkpoint.pt", "config.json", "metrics.json"}
+        if not isinstance(outputs, dict) or set(outputs) != required:
+            raise ValueError("Training output manifest is incomplete")
+        for name, expected in outputs.items():
+            path = run / name
+            if not path.is_file() or fingerprint(path) != expected:
+                raise ValueError(f"Training output {name} changed")
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid training artifact for {run.name}: {exc}; rerun {command}."
+        ) from exc
+    return record
 
 
 def seal_evaluation(data: dict[str, Any], backbone: str | None = None) -> None:
@@ -106,6 +216,8 @@ def validate_evaluation(run: Path) -> dict[str, Any]:
     record = data.get("provenance", {})
     record.setdefault("command", command)
     validate(record)
+    if not data.get("baseline"):
+        validate_training(run)
     payload = {key: value for key, value in data.items() if key != "provenance"}
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     if record.get("payload_sha256") != digest:
