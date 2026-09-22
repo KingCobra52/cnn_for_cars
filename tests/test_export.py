@@ -7,6 +7,7 @@ real input.
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +15,7 @@ import pytest
 import torch
 from torch import nn
 
-from carvision.export import ExportError, ServingModel, export, verify
+from carvision.export import OPSET, ExportError, ServingModel, export, verify
 
 
 class TinyBackbone(nn.Module):
@@ -27,6 +28,51 @@ class TinyBackbone(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.pool(torch.relu(self.conv(x))).flatten(1)
+
+
+def register_tiny_backbone(monkeypatch, name: str) -> str:
+    """Register the test backbone and return its name."""
+    from carvision.data.transforms import PreprocessSpec
+    from carvision.models.backbones import REGISTRY, BackboneSpec
+
+    spec = BackboneSpec(
+        name=name,
+        weights_tag="test",
+        embedding_dim=12,
+        preprocess=PreprocessSpec(resize=32, crop=32, mean=(0.5,) * 3, std=(0.5,) * 3),
+        factory=TinyBackbone,
+    )
+    monkeypatch.setitem(REGISTRY, name, spec)
+    return name
+
+
+def write_external_legacy_model(path: Path) -> tuple[bytes, bytes]:
+    """Write a valid ONNX graph whose initializers live in ``.onnx.data``."""
+    onnx = pytest.importorskip("onnx")
+    from onnx import TensorProto, helper, numpy_helper
+
+    graph = helper.make_graph(
+        [helper.make_node("Gemm", ["images", "weight", "bias"], ["logits"])],
+        "legacy",
+        [helper.make_tensor_value_info("images", TensorProto.FLOAT, [None, 3])],
+        [helper.make_tensor_value_info("logits", TensorProto.FLOAT, [None, 2])],
+        [
+            numpy_helper.from_array(np.arange(6, dtype=np.float32).reshape(3, 2), "weight"),
+            numpy_helper.from_array(np.array([0.25, -0.25], dtype=np.float32), "bias"),
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    onnx.save_model(
+        model,
+        path,
+        save_as_external_data=True,
+        all_tensors_to_one_file=True,
+        location=f"{path.name}.data",
+        size_threshold=0,
+    )
+    onnx.checker.check_model(onnx.load(path, load_external_data=True))
+    sidecar = Path(f"{path}.data")
+    return path.read_bytes(), sidecar.read_bytes()
 
 
 @pytest.fixture
@@ -122,53 +168,104 @@ def test_export_writes_one_self_contained_model_file(tmp_path, monkeypatch) -> N
     """Large production graphs must not hide untracked weights in a sidecar file."""
     pytest.importorskip("onnx")
     pytest.importorskip("onnxruntime")
-    from carvision.data.transforms import PreprocessSpec
-    from carvision.models.backbones import REGISTRY, BackboneSpec
-
-    spec = BackboneSpec(
-        name="tiny_single_file",
-        weights_tag="test",
-        embedding_dim=12,
-        preprocess=PreprocessSpec(resize=32, crop=32, mean=(0.5,) * 3, std=(0.5,) * 3),
-        factory=TinyBackbone,
-    )
-    monkeypatch.setitem(REGISTRY, spec.name, spec)
+    name = register_tiny_backbone(monkeypatch, "tiny_single_file")
     path = tmp_path / "model.onnx"
-    Path(f"{path}.data").write_bytes(b"stale sidecar")
+    write_external_legacy_model(path)
 
-    export(spec.name, nn.Linear(12, 7), path, image_size=32, verify_batch=1)
+    result = export(name, nn.Linear(12, 7), path, image_size=32, verify_batch=1)
 
     assert path.is_file()
     assert not Path(f"{path}.data").exists()
+    assert result.path == path
+    onnx = pytest.importorskip("onnx")
+    model = onnx.load(path, load_external_data=False)
+    assert all(not tensor.external_data for tensor in model.graph.initializer)
+    assert next(item.version for item in model.opset_import if item.domain == "") == OPSET
 
 
-def test_failed_export_preserves_existing_serving_bundle(tmp_path, monkeypatch) -> None:
-    """A failed replacement must leave both the old graph and its weights intact."""
-    from carvision.data.transforms import PreprocessSpec
-    from carvision.models.backbones import REGISTRY, BackboneSpec
-
-    spec = BackboneSpec(
-        name="tiny_failed_replacement",
-        weights_tag="test",
-        embedding_dim=12,
-        preprocess=PreprocessSpec(resize=32, crop=32, mean=(0.5,) * 3, std=(0.5,) * 3),
-        factory=TinyBackbone,
-    )
-    monkeypatch.setitem(REGISTRY, spec.name, spec)
+@pytest.mark.parametrize("failure", ["exporter", "parity", "replacement"])
+def test_failed_export_preserves_external_legacy_model(tmp_path, monkeypatch, failure) -> None:
+    """Every pre-publication failure preserves a loadable legacy graph byte-for-byte."""
+    name = register_tiny_backbone(monkeypatch, f"tiny_failed_{failure}")
     path = tmp_path / "model.onnx"
     sidecar = Path(f"{path}.data")
-    path.write_bytes(b"old graph")
-    sidecar.write_bytes(b"old weights")
+    old_graph, old_weights = write_external_legacy_model(path)
+    export_module = importlib.import_module("carvision.export")
 
     def fail_export(*args, **kwargs) -> None:
         Path(args[2]).write_bytes(b"partial replacement")
         raise RuntimeError("injected exporter failure")
 
-    monkeypatch.setattr(torch.onnx, "export", fail_export)
+    def fail_parity(*args, **kwargs) -> None:
+        raise ExportError("injected parity failure")
 
-    with pytest.raises(RuntimeError, match="injected exporter failure"):
-        export(spec.name, nn.Linear(12, 7), path, image_size=32, verify_batch=1)
+    def fail_replacement(*args, **kwargs) -> None:
+        raise OSError("injected replacement failure")
 
-    assert path.read_bytes() == b"old graph"
-    assert sidecar.read_bytes() == b"old weights"
+    if failure == "exporter":
+        monkeypatch.setattr(torch.onnx, "export", fail_export)
+    elif failure == "parity":
+        monkeypatch.setattr(export_module, "verify", fail_parity)
+    else:
+        monkeypatch.setattr(Path, "replace", fail_replacement)
+
+    with pytest.raises((RuntimeError, ExportError, OSError), match=f"injected {failure}"):
+        export(name, nn.Linear(12, 7), path, image_size=32, verify_batch=1)
+
+    assert path.read_bytes() == old_graph
+    assert sidecar.read_bytes() == old_weights
+    onnx = pytest.importorskip("onnx")
+    onnx.checker.check_model(onnx.load(path, load_external_data=True))
     assert set(tmp_path.iterdir()) == {path, sidecar}
+
+
+@pytest.mark.parametrize("failure", ["exporter", "parity", "replacement"])
+def test_failed_first_export_leaves_no_files(tmp_path, monkeypatch, failure) -> None:
+    """A first export is all-or-nothing and cleans its private staging directory."""
+    name = register_tiny_backbone(monkeypatch, f"tiny_first_{failure}")
+    path = tmp_path / "model.onnx"
+    export_module = importlib.import_module("carvision.export")
+
+    def fail_export(*args, **kwargs) -> None:
+        raise RuntimeError("injected exporter failure")
+
+    def fail_parity(*args, **kwargs) -> None:
+        raise ExportError("injected parity failure")
+
+    def fail_replacement(*args, **kwargs) -> None:
+        raise OSError("injected replacement failure")
+
+    if failure == "exporter":
+        monkeypatch.setattr(torch.onnx, "export", fail_export)
+    elif failure == "parity":
+        monkeypatch.setattr(export_module, "verify", fail_parity)
+    else:
+        monkeypatch.setattr(Path, "replace", fail_replacement)
+
+    with pytest.raises((RuntimeError, ExportError, OSError), match=f"injected {failure}"):
+        export(name, nn.Linear(12, 7), path, image_size=32, verify_batch=1)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_sidecar_cleanup_failure_keeps_new_graph(tmp_path, monkeypatch, caplog) -> None:
+    """Obsolete-weight cleanup is non-fatal after the graph has been published."""
+    name = register_tiny_backbone(monkeypatch, "tiny_cleanup_warning")
+    path = tmp_path / "model.onnx"
+    write_external_legacy_model(path)
+    sidecar = Path(f"{path}.data")
+    original_unlink = Path.unlink
+
+    def fail_sidecar_unlink(self, *args, **kwargs):
+        if self == sidecar:
+            raise PermissionError("injected cleanup failure")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_sidecar_unlink)
+    result = export(name, nn.Linear(12, 7), path, image_size=32, verify_batch=1)
+
+    assert result.path == path
+    assert sidecar.exists()
+    assert "Could not remove legacy ONNX sidecar" in caplog.text
+    onnx = pytest.importorskip("onnx")
+    onnx.checker.check_model(onnx.load(path, load_external_data=False))

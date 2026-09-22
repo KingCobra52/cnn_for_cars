@@ -13,10 +13,10 @@ export runs it and refuses to report success without it.
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
 import numpy as np
 import torch
@@ -134,12 +134,12 @@ def export(
     # deliberately describe one portable model file, so keep the weights in it.
     logger.info("Exporting %s + %s -> %s", backbone_name, type(head).__name__, output_path)
 
-    # Stage and verify beside the destination before touching a serving graph that may
-    # currently be live. Keeping both files in the same directory also makes the final
-    # replace atomic on the destination filesystem.
-    staged_path = output_path.with_name(f".{output_path.name}.{uuid4().hex}.tmp.onnx")
-    staged_sidecar = Path(f"{staged_path}.data")
-    try:
+    # Stage and verify in a private directory beside the destination before touching a
+    # serving graph that may currently be live. The shared parent guarantees that the
+    # final Path.replace is atomic on the destination filesystem. TemporaryDirectory
+    # removes both the graph and any exporter-created sidecars on every exit path.
+    with tempfile.TemporaryDirectory(prefix=f".{output_path.name}.", dir=output_path.parent) as tmp:
+        staged_path = Path(tmp) / output_path.name
         torch.onnx.export(
             model,
             (example,),
@@ -160,10 +160,14 @@ def export(
         staged_path.replace(output_path)
         # Only after the new self-contained graph is installed can an old graph's
         # external weights be safely removed.
-        Path(f"{output_path}.data").unlink(missing_ok=True)
-    finally:
-        staged_path.unlink(missing_ok=True)
-        staged_sidecar.unlink(missing_ok=True)
+        legacy_sidecar = Path(f"{output_path}.data")
+        try:
+            legacy_sidecar.unlink(missing_ok=True)
+        except OSError as exc:
+            # The graph is already valid and atomically published. Rolling it back (or
+            # reporting export failure) would be worse than retaining an unused legacy
+            # weights file, so make this explicitly non-fatal and actionable.
+            logger.warning("Could not remove legacy ONNX sidecar %s: %s", legacy_sidecar, exc)
 
     result = ExportResult(
         path=output_path,
