@@ -116,7 +116,17 @@ def test_headline_groups_seeds_into_one_row(runs: Path) -> None:
 
     assert len(body) == 2, "three dinov2 seeds should collapse into a single row"
     assert "dinov2_vits14" in body[0], "the stronger backbone should be listed first"
-    assert "3 (±" in body[0], "the row should report how many seeds it aggregates"
+    assert body[0].endswith("| 3 |"), "the row should report how many seeds it aggregates"
+    assert "86.00% ± 1.00%" in body[0], "the row should report the seed mean and sample SD"
+
+
+def test_headline_labels_representative_and_aggregate_metrics(runs: Path) -> None:
+    table = headline_table(collect_runs(runs))
+
+    assert "Representative top-1 (95% CI)" in table
+    assert "Top-1 mean ± SD" in table
+    assert "Representative top-5" in table
+    assert "Representative macro-F1" in table
 
 
 def test_headline_uses_the_median_seed_not_the_best(runs: Path) -> None:
@@ -152,6 +162,8 @@ def test_render_produces_a_complete_document(runs: Path) -> None:
 
     assert "Do not edit by hand" in document
     assert "8,041" in document
+    assert "median-validation seed" in document
+    assert "summarises all training seeds" in document
 
 
 def test_render_refuses_with_no_runs() -> None:

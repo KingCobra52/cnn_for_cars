@@ -112,8 +112,9 @@ def headline_table(summaries: list[RunSummary]) -> str:
         grouped[(summary.backbone, summary.head)].append(summary)
 
     lines = [
-        "| Backbone | Head | Top-1 (95% CI) | Top-5 | Macro-F1 | Seeds |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| Backbone | Head | Representative top-1 (95% CI) "
+        "| Top-1 mean ± SD | Representative top-5 | Representative macro-F1 | Seeds |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     # Ordered by validation accuracy. Ordering by test accuracy would be a selection
     # decision made on the test set, in the very document whose premise is that no
@@ -131,9 +132,9 @@ def headline_table(summaries: list[RunSummary]) -> str:
 
         lines.append(
             f"| `{backbone}` | {head} | {_interval(representative)} "
+            f"| {_percent(spread['mean'])} ± {100 * spread['std']:.2f}% "
             f"| {_percent(representative.top5)} "
-            f"| {representative.macro_f1:.3f} "
-            f"| {spread['n']} (± {100 * spread['std']:.2f}) |"
+            f"| {representative.macro_f1:.3f} | {spread['n']} |"
         )
     return "\n".join(lines)
 
@@ -208,8 +209,9 @@ def render(summaries: list[RunSummary]) -> str:
 
  Stanford Cars, official held-out test split of \
 {best.evaluation["metrics"]["num_samples"]:,} images.
- Intervals are 95% bootstrap CIs over the test set; `±` is the standard
-deviation across training seeds.
+ The representative scores and intervals come from the median-validation seed for
+each configuration, selected without consulting the test set. Top-1 mean ± SD
+summarises all training seeds; intervals are 95% bootstrap CIs over the test set.
 
 ## Headline
 

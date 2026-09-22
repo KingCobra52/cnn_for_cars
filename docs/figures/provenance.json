@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "command": "carvision figures",
+  "files": {
+    "artifacts/runs/dinov2_vits14-mlp-seed3/evaluation.json": "885ba1811bb0db125d645acd63b3631ed9ea97dd704fff398286dc1367632494",
+    "artifacts/runs/dinov2_vits14-mlp-seed3/test_predictions.npz": "3e1c176bb077ccf27d5b95d4f628e4617de04db9026cc8610fd3e0e892e0fe7a",
+    "artifacts/runs/dinov2_vits14-mlp-seed3/metrics.json": "030da83ca4af7c1057005dede30c25712ce137631f5c9ab4abf65fa79810069f",
+    "docs/figures/training_curves.png": "d35cd3a92bb487d8c21315879f7f0cdf5606d87aad21955c90d4cbb2cda800f6",
+    "docs/figures/calibration.png": "ea5fdb787eeb9097b0e6b321ce421fecd238d8364d6f190d08333812838c7895",
+    "docs/figures/error_structure.png": "5e76532d22ac063763bb04195314a829ade94169d0b7beeac5bce9b0d22ba7cc",
+    "docs/figures/confusion.png": "a650d3160543249ae2322604f6e05b98cee7d2c64cbc7e28a83623a269d405a9"
+  }
+}
